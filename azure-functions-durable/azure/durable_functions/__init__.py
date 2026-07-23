@@ -23,10 +23,17 @@ from .internal.compat.compat_aliases import (
     DurableOrchestrationClient,
     Entity,
 )
+from .internal.trigger_output_encoding import ensure_string_trigger_output_encoding
 
 # IMPORTANT: DO NOT REMOVE. `azure-functions` relies on the presence and value of this variable
 # for version detection
 version = "2.x"
+
+# Some azure-functions releases register durable orchestration/entity trigger
+# converters that encode their output as a ``json`` Datum. The Durable Functions
+# host expects the worker's base64-encoded gRPC response as a ``string`` Datum,
+# so force that encoding here regardless of the installed azure-functions version.
+ensure_string_trigger_output_encoding()
 
 __all__ = [
     "Blueprint",
