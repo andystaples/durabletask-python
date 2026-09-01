@@ -16,9 +16,7 @@ durabletask-native APIs provided by `azure-functions-durable` 2.x.
 - [Azure Functions Core Tools 4.x](https://learn.microsoft.com/azure/azure-functions/functions-run-local)
 - [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite)
 
-The samples use the preview Azure Functions extension bundle required by the
-Durable Functions 2.x provider. Their `local.settings.json` files connect to
-Azurite.
+The samples' `local.settings.json` files connect to Azurite.
 
 ## Run a sample
 
