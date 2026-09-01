@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ADDED
 
+- Added an optional timeout to filtered orchestration purges. Callers can now
+limit a purge operation's duration and inspect `PurgeInstancesResult.is_complete`
+for completed, partial, or backend-unknown completion status.
 - Added `OrchestrationQuery.instance_id_prefix` to retrieve orchestration
 instances whose IDs begin with a specified prefix.
 - Added optional `reason` parameters to `TaskHubGrpcClient` and

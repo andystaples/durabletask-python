@@ -8,7 +8,7 @@ import time
 import uuid
 from collections.abc import AsyncIterable, Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar, cast, overload
 
@@ -211,8 +211,15 @@ class EntityQuery:
 
 @dataclass
 class PurgeInstancesResult:
+    """The outcome of a purge operation.
+
+    ``is_complete`` is ``None`` when the backend does not report whether the
+    purge completed, ``False`` when the operation stopped before completion,
+    and ``True`` when it completed.
+    """
+
     deleted_instance_count: int
-    is_complete: bool
+    is_complete: bool | None
 
 
 @dataclass
@@ -271,6 +278,12 @@ def parse_orchestration_state(
         state.customStatus.value if not helpers.is_empty(state.customStatus) else None,
         failure_details,
         data_converter if data_converter is not None else DEFAULT_DATA_CONVERTER)
+
+
+def new_purge_instances_result(response: pb.PurgeInstancesResponse) -> PurgeInstancesResult:
+    """Build a purge result while preserving the completion field's presence."""
+    is_complete = response.isComplete.value if response.HasField("isComplete") else None
+    return PurgeInstancesResult(response.deletedInstanceCount, is_complete)
 
 
 # Grace period before a retired SDK-owned channel is force-closed. Long enough
@@ -849,21 +862,23 @@ class TaskHubGrpcClient:
         req = pb.PurgeInstancesRequest(instanceId=instance_id, recursive=recursive)
         self._logger.info(f"Purging instance '{instance_id}'.")
         resp: pb.PurgeInstancesResponse = self._stub.PurgeInstances(req)
-        return PurgeInstancesResult(resp.deletedInstanceCount, resp.isComplete.value)
+        return new_purge_instances_result(resp)
 
     def purge_orchestrations_by(self,
                                 created_time_from: datetime | None = None,
                                 created_time_to: datetime | None = None,
                                 runtime_status: list[OrchestrationStatus] | None = None,
-                                recursive: bool = False) -> PurgeInstancesResult:
+                                recursive: bool = False,
+                                timeout: timedelta | None = None) -> PurgeInstancesResult:
         self._logger.info("Purging orchestrations by filter: "
                           f"created_time_from={created_time_from}, "
                           f"created_time_to={created_time_to}, "
                           f"runtime_status={[str(status) for status in runtime_status] if runtime_status else None}, "
-                          f"recursive={recursive}")
-        req = build_purge_by_filter_req(created_time_from, created_time_to, runtime_status, recursive)
+                          f"recursive={recursive}, "
+                          f"timeout={timeout}")
+        req = build_purge_by_filter_req(created_time_from, created_time_to, runtime_status, recursive, timeout)
         resp: pb.PurgeInstancesResponse = self._stub.PurgeInstances(req)
-        return PurgeInstancesResult(resp.deletedInstanceCount, resp.isComplete.value)
+        return new_purge_instances_result(resp)
 
     def signal_entity(self,
                       entity_instance_id: EntityInstanceId,
@@ -1391,21 +1406,23 @@ class AsyncTaskHubGrpcClient:
         req = pb.PurgeInstancesRequest(instanceId=instance_id, recursive=recursive)
         self._logger.info(f"Purging instance '{instance_id}'.")
         resp: pb.PurgeInstancesResponse = await self._get_stub().PurgeInstances(req)
-        return PurgeInstancesResult(resp.deletedInstanceCount, resp.isComplete.value)
+        return new_purge_instances_result(resp)
 
     async def purge_orchestrations_by(self,
                                       created_time_from: datetime | None = None,
                                       created_time_to: datetime | None = None,
                                       runtime_status: list[OrchestrationStatus] | None = None,
-                                      recursive: bool = False) -> PurgeInstancesResult:
+                                      recursive: bool = False,
+                                      timeout: timedelta | None = None) -> PurgeInstancesResult:
         self._logger.info("Purging orchestrations by filter: "
                           f"created_time_from={created_time_from}, "
                           f"created_time_to={created_time_to}, "
                           f"runtime_status={[str(status) for status in runtime_status] if runtime_status else None}, "
-                          f"recursive={recursive}")
-        req = build_purge_by_filter_req(created_time_from, created_time_to, runtime_status, recursive)
+                          f"recursive={recursive}, "
+                          f"timeout={timeout}")
+        req = build_purge_by_filter_req(created_time_from, created_time_to, runtime_status, recursive, timeout)
         resp: pb.PurgeInstancesResponse = await self._get_stub().PurgeInstances(req)
-        return PurgeInstancesResult(resp.deletedInstanceCount, resp.isComplete.value)
+        return new_purge_instances_result(resp)
 
     async def signal_entity(self,
                             entity_instance_id: EntityInstanceId,

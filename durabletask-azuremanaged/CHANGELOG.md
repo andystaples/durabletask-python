@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ADDED
 
+- Added an optional timeout to filtered orchestration purges through
+`DurableTaskSchedulerClient` and `AsyncDurableTaskSchedulerClient`.
 - Added inherited `OrchestrationQuery.instance_id_prefix` support to retrieve
 orchestration instances whose IDs begin with a specified prefix.
 - Added optional `reason` parameters to suspend and resume operations inherited
