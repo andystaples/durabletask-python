@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ADDED
 
+- Added optional `reason` parameters to `TaskHubGrpcClient` and
+`AsyncTaskHubGrpcClient` suspend and resume operations. The reason is now sent
+to the backend with the lifecycle request.
 - Added the optional `new_version` argument to
 `OrchestrationContext.continue_as_new()` so continued orchestrations can
 switch to a new version.
