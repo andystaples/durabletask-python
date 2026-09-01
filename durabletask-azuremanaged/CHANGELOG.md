@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ADDED
 
+- Added a `logger` parameter to `DurableTaskSchedulerClient`,
+`AsyncDurableTaskSchedulerClient`, and `DurableTaskSchedulerWorker`.
+Applications can now provide fully configured loggers without the SDK modifying
+them.
 - Added `exception_properties_provider` to `DurableTaskSchedulerWorker` for
 attaching portable custom properties to activity, entity, and orchestration
 failures.
@@ -18,6 +22,13 @@ failures.
 orchestration instances whose IDs begin with a specified prefix.
 - Added optional `reason` parameters to suspend and resume operations inherited
 from `TaskHubGrpcClient` and `AsyncTaskHubGrpcClient`.
+
+CHANGED
+
+- Deprecated the `log_handler` and `log_formatter` parameters on
+`DurableTaskSchedulerClient`, `AsyncDurableTaskSchedulerClient`, and
+`DurableTaskSchedulerWorker`. Configure and pass a `logger` instead. These
+parameters will be removed in a future major release.
 
 ## v1.9.0
 

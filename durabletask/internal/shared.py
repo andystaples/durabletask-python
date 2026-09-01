@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import inspect
 import logging
 import warnings
 from collections.abc import Sequence
@@ -70,6 +71,22 @@ AsyncClientInterceptor: TypeAlias = (
 
 SECURE_PROTOCOLS = ["https://", "grpcs://"]
 INSECURE_PROTOCOLS = ["http://", "grpc://"]
+
+
+def _get_legacy_logging_warning_stacklevel() -> int:
+    stacklevel = 1
+    frame = inspect.currentframe()
+    if frame is not None:
+        frame = frame.f_back
+
+    while frame is not None:
+        module_name = frame.f_globals.get("__name__", "")
+        if module_name != "durabletask" and not module_name.startswith("durabletask."):
+            break
+        stacklevel += 1
+        frame = frame.f_back
+
+    return stacklevel
 
 
 def get_default_host_address() -> str:
@@ -178,7 +195,22 @@ def get_async_grpc_channel(
 def get_logger(
         name_suffix: str,
         log_handler: logging.Handler | None = None,
-        log_formatter: logging.Formatter | None = None) -> logging.Logger:
+        log_formatter: logging.Formatter | None = None,
+        logger: logging.Logger | None = None) -> logging.Logger:
+    if logger is not None:
+        if log_handler is not None or log_formatter is not None:
+            raise ValueError(
+                "'logger' cannot be combined with 'log_handler' or 'log_formatter'.")
+        return logger
+
+    if log_handler is not None or log_formatter is not None:
+        warnings.warn(
+            "'log_handler' and 'log_formatter' are deprecated and will be removed "
+            "in a future major release. Configure and pass a 'logger' instead.",
+            DeprecationWarning,
+            stacklevel=_get_legacy_logging_warning_stacklevel(),
+        )
+
     logger = logging.Logger(f"durabletask-{name_suffix}")
 
     # Add a default log handler if none is provided

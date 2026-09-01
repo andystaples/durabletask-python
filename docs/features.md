@@ -268,6 +268,77 @@ message formatting.
 > Create the replay-safe logger once at the start of your orchestrator
 > and reuse it throughout the function.
 
+### SDK logging
+
+`TaskHubGrpcClient`, `AsyncTaskHubGrpcClient`, and `TaskHubGrpcWorker`
+accept a configured `logging.Logger` through their `logger` parameter. The
+SDK uses a supplied logger unchanged: it does not add handlers or modify its
+formatter, level, filters, or propagation setting. The Durable Task Scheduler
+client and worker accept the same parameter.
+
+Use one shared logger when client and worker records should use the same
+destination, format, and correlation filters:
+
+```python
+import logging
+
+from durabletask.client import TaskHubGrpcClient
+from durabletask.worker import TaskHubGrpcWorker
+
+sdk_logger = logging.getLogger("myapp.durabletask")
+sdk_logger.setLevel(logging.INFO)
+
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(name)s %(levelname)s %(message)s"))
+sdk_logger.addHandler(handler)
+sdk_logger.propagate = False
+
+worker = TaskHubGrpcWorker(logger=sdk_logger)
+client = TaskHubGrpcClient(logger=sdk_logger)
+```
+
+Because `logging.getLogger()` returns the same logger for a given name,
+configure a shared logger once during application startup. Do not add a new
+handler every time a client or worker is constructed, or every record will be
+emitted once by each handler.
+
+Alternatively, configure handlers on the root logger and allow propagation:
+
+```python
+import logging
+
+logging.basicConfig(level=logging.INFO)
+sdk_logger = logging.getLogger("myapp.durabletask")
+
+worker = TaskHubGrpcWorker(logger=sdk_logger)
+client = TaskHubGrpcClient(logger=sdk_logger)
+```
+
+> [!WARNING]
+> Use either handlers attached directly to `sdk_logger` with
+> `sdk_logger.propagate = False`, or root handlers with propagation enabled.
+> Combining both emits each Durable Task record twice.
+
+Pass separate named loggers when clients and workers need independently
+configured levels, destinations, or filters:
+
+```python
+worker = TaskHubGrpcWorker(
+    logger=logging.getLogger("myapp.durabletask.worker"))
+client = TaskHubGrpcClient(
+    logger=logging.getLogger("myapp.durabletask.client"))
+```
+
+The older `log_handler` and `log_formatter` parameters are deprecated. They
+will be removed in a future major release. Passing either one together with
+`logger` raises `ValueError`; none of the supplied logging options are ignored.
+
+> [!NOTE]
+> SDK clients and workers emit detailed `DEBUG` logs that can help diagnose
+> orchestration behavior. Enable that level on the logger you pass to the SDK
+> when reproducing an issue.
+
 ### Large payload externalization
 
 Orchestration inputs, outputs, and event data are transmitted through gRPC messages. When these
@@ -570,34 +641,6 @@ export_client = ExportHistoryClient(
 > dependencies — only the bundled destination does. Future
 > first-party destinations (S3, GCS, etc.) will be packaged as
 > additional optional extras using the same pattern.
-
-### Logging configuration
-
-Both the TaskHubGrpcWorker and TaskHubGrpcClient (as well as DurableTaskSchedulerWorker and
-DurableTaskSchedulerClient for durabletask-azuremanaged) accept a log_handler and log_formatter
-object from `logging`. These can be used to customize verbosity, output location, and format of logs
-emitted by these sources.
-
-For example, to output logs to a file called `worker.log` at level `DEBUG`, the following syntax
-might apply:
-
-```python
-log_handler = logging.FileHandler('durable.log', encoding='utf-8')
-log_handler.setLevel(logging.DEBUG)
-
-with DurableTaskSchedulerWorker(
-    host_address=endpoint,
-    secure_channel=secure_channel,
-    taskhub=taskhub_name,
-    token_credential=credential,
-    log_handler=log_handler,
-) as w:
-```
-
-> [!NOTE]
-> The worker and client output many logs at the `DEBUG` level that will be useful when understanding
-orchestration flow and diagnosing issues with Durable applications. Before submitting issues, please
-attempt a repro of the issue with debug logging enabled.
 
 ### Work item filtering
 

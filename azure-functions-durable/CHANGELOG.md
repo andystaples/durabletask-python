@@ -24,6 +24,13 @@ FIXED
 discarding their `reason` arguments. Reasons are now forwarded to the Durable
 Task backend.
 
+CHANGED
+
+- Durable Functions client and worker logs now use the Azure Functions
+host-managed `azure.durable_functions` logger hierarchy instead of private SDK
+handlers. Configure their level, destination, and telemetry routing through the
+standard Functions/Python logging configuration.
+
 ## v2.0.0b2
 
 ADDED

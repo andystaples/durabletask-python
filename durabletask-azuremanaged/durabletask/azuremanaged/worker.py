@@ -48,8 +48,13 @@ class DurableTaskSchedulerWorker(TaskHubGrpcWorker):
             settings will be used.
         payload_store (PayloadStore | None, optional): A payload store for
             externalizing large payloads. If None, payloads are sent inline.
-        log_handler (logging.Handler | None, optional): Custom logging handler for worker logs.
-        log_formatter (logging.Formatter | None, optional): Custom log formatter for worker logs.
+        log_handler (logging.Handler | None, optional): Deprecated custom logging
+            handler for worker logs. Use ``logger`` instead.
+        log_formatter (logging.Formatter | None, optional): Deprecated custom log
+            formatter. Use ``logger`` instead.
+        logger (logging.Logger | None, optional): Caller-configured logger for
+            worker logs. It cannot be combined with ``log_handler`` or
+            ``log_formatter``; doing so raises ``ValueError``.
         exception_properties_provider (ExceptionPropertiesProvider | None, optional):
             Extracts portable custom properties from exceptions reported by this worker.
 
@@ -91,6 +96,7 @@ class DurableTaskSchedulerWorker(TaskHubGrpcWorker):
                  data_converter: DataConverter | None = None,
                  log_handler: logging.Handler | None = None,
                  log_formatter: logging.Formatter | None = None,
+                 logger: logging.Logger | None = None,
                  exception_properties_provider: ExceptionPropertiesProvider | None = None):
 
         if not taskhub:
@@ -113,6 +119,7 @@ class DurableTaskSchedulerWorker(TaskHubGrpcWorker):
             metadata=None,
             log_handler=log_handler,
             log_formatter=log_formatter,
+            logger=logger,
             interceptors=resolved_interceptors,
             channel_options=channel_options,
             resiliency_options=resiliency_options,
