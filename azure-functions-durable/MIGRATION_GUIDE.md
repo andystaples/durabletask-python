@@ -32,8 +32,6 @@ Before upgrading, account for these 2.x requirements:
 - **Only the Azure Functions Python V2 programming model is supported.** Apps
   must use `DFApp` or `Blueprint` decorators. The classic programming model with
   one directory and `function.json` per function is not supported.
-- **A modern Durable Functions host is required.** Local sample apps use the
-  preview extension bundle shown below.
 - **The OpenAI Agents integration was removed.** The
   `azure.durable_functions.openai_agents` package is not available in 2.x.
 - **The primary APIs now come from `durabletask`.** Compatibility aliases are
@@ -72,29 +70,7 @@ azure-functions>=2.3.0b2
 azure-functions-durable>=2.0.0b1,<3
 ```
 
-### 3. Update the extension bundle
-
-Use the preview extension bundle that contains the required Durable Task gRPC
-runtime:
-
-```json
-{
-  "version": "2.0",
-  "extensionBundle": {
-    "id": "Microsoft.Azure.Functions.ExtensionBundle.Preview",
-    "version": "[4.*, 5.0.0)"
-  },
-  "extensions": {
-    "durableTask": {
-      "storageProvider": {
-        "type": "AzureStorage"
-      }
-    }
-  }
-}
-```
-
-### 4. Keep supported 1.x code temporarily
+### 3. Keep supported 1.x code temporarily
 
 A decorator-based 1.x orchestrator and client starter can run through the 2.x
 compatibility layer without changing their function shape:
