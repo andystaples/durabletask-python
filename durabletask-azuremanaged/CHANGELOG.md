@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ADDED
 
+- Added `exception_properties_provider` to `DurableTaskSchedulerWorker` for
+attaching portable custom properties to activity, entity, and orchestration
+failures.
 - Added an optional timeout to filtered orchestration purges through
 `DurableTaskSchedulerClient` and `AsyncDurableTaskSchedulerClient`.
 - Added inherited `OrchestrationQuery.instance_id_prefix` support to retrieve

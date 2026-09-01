@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ADDED
 
+- Added `ExceptionPropertiesProvider` and the
+`exception_properties_provider` worker option to attach portable custom
+properties to activity, entity, and orchestration failures. Failure
+properties and recursive inner failures are available through
+`FailureDetails`, task-failure exceptions, orchestration state, and history.
 - Added an optional timeout to filtered orchestration purges. Callers can now
 limit a purge operation's duration and inspect `PurgeInstancesResult.is_complete`
 for completed, partial, or backend-unknown completion status.
