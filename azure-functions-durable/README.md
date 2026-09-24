@@ -91,6 +91,18 @@ reference strings instead. Applications exchanging externalized payloads must
 agree on the store and reference encoding; Functions references are JSON strings.
 
 > [!WARNING]
+> Storage failures can fail durable invocations, including orchestrations.
+> Storage transport retries are separate from durable activity retry policies.
+> This SDK does not add an activity retry policy or guarantee that the Functions
+> host abandons and redelivers a work item after a storage failure. A transient
+> storage error can therefore become a terminal orchestration failure.
+
+Activity payload storage runs within the invocation: synchronous activities use
+the host's activity thread, and asynchronous activities await the store's async
+methods. Both client history APIs hydrate entity operation inputs and results,
+including values nested in the host's entity protocol envelopes.
+
+> [!WARNING]
 > With payload storage configured, whole payload strings recognized by the
 > store's `is_known_token()` are reserved references, not literal application
 > data. For `BlobPayloadStore`, this includes strings of the form

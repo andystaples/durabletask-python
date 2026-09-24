@@ -3,6 +3,7 @@
 
 """Large payloads across Functions clients, replay, and activity bindings."""
 
+import json
 import os
 
 import pytest
@@ -57,3 +58,15 @@ def test_large_payload_durable_operations(dtask_app, orchestrator):
     if orchestrator == "payload_continue_roundtrip":
         expected["stages"] = ["continued", "activity", "activity"]
     assert status["output"] == expected
+    if orchestrator == "payload_entity_roundtrip":
+        for mode in ("sync", "async"):
+            response = http_request(
+                "GET", f"{dtask_app.base_url}/api/payload-history-{mode}/{instance_id}")
+            assert response.status == 200, response.body
+            envelopes = response.json()
+            results = [json.loads(envelope["result"]) for envelope in envelopes
+                       if isinstance(envelope, dict) and envelope.get("result")]
+            assert results.count(payload) == 2
+            inputs = [json.loads(envelope["input"]) for envelope in envelopes
+                      if isinstance(envelope, dict) and envelope.get("op") == "set"]
+            assert inputs == [payload]

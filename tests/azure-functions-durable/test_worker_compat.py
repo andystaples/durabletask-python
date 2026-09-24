@@ -37,7 +37,8 @@ def test_configure_large_payloads_reaches_workers(monkeypatch):
     app = df.DFApp()
     app.configure_large_payloads(payload_store=store)
     app.configure_large_payloads(payload_store=store)
-    assert DurableFunctionsWorker()._payload_store._store is store
+    assert DurableFunctionsWorker()._payload_store is None
+    assert payloads.get_transport_payload_store()._store is store
     with pytest.raises(ValueError, match="different payload store"):
         app.configure_large_payloads(payload_store=Mock(spec=PayloadStore))
     assert payloads.get_payload_store() is store
@@ -71,6 +72,35 @@ def test_worker_created_before_configuration_hydrates_and_externalizes(monkeypat
     result_token = json.loads(completion.result.value)
     assert store.is_known_token(result_token)
     assert json.loads(store.download(result_token)) == value
+
+
+@pytest.mark.parametrize("entity", [False, True])
+@pytest.mark.parametrize("storage_failure", [False, True])
+def test_worker_preserves_output_error(monkeypatch, payload_store_factory, entity, storage_failure):
+    store = payload_store_factory(max_stored_payload_bytes=150)
+    error = OSError("payload storage unavailable")
+    if storage_failure:
+        store = payload_store_factory()
+        monkeypatch.setattr(store, "upload", Mock(side_effect=error))
+    monkeypatch.setattr(payloads, "_payload_store", store)
+
+    def orchestrator(context):
+        return "x" * 200
+
+    def counter(context):
+        context.set_state("x" * 200)
+
+    with pytest.raises(OSError if storage_failure else ValueError) as raised:
+        worker = DurableFunctionsWorker()
+        if entity:
+            worker.execute_entity_batch_request(counter, _encode_entity_batch_request("@counter@key", "set"))
+        else:
+            worker.execute_orchestration_request(orchestrator, _encode_orchestrator_request("oversized"))
+    if storage_failure:
+        assert raised.value is error
+    else:
+        assert "202 bytes" in str(raised.value)
+        assert "150 bytes" in str(raised.value)
 
 
 def _encode_orchestrator_request(name, encoded_input=None, instance_id=TEST_INSTANCE_ID):

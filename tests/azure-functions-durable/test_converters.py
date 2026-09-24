@@ -32,6 +32,19 @@ from azure.durable_functions.internal.converters import (
 )
 from azure.durable_functions.internal import payloads
 from azure.durable_functions.internal.serialization import FunctionsDataConverter
+from azure.durable_functions.internal.compat.activity import wrap_activity_payloads
+
+
+def _encode_activity(value):
+    result = wrap_activity_payloads(lambda payload: payload, "payload")(value)
+    return ActivityTriggerConverter.encode(result, expected_type=None)
+
+
+def _decode_activity(datum, **kwargs):
+    received = []
+    wrapper = wrap_activity_payloads(lambda payload: received.append(payload), "payload")
+    wrapper(ActivityTriggerConverter.decode(datum, trigger_metadata=None))
+    return received[0]
 
 
 # ---------------------------------------------------------------------------
@@ -112,21 +125,21 @@ def test_activity_trigger_decode_falls_back_to_raw_string():
 def test_activity_trigger_externalizes_and_hydrates(monkeypatch, payload_store_factory, data_type, value):
     store = payload_store_factory()
     monkeypatch.setattr(payloads, "_payload_store", store)
-    encoded = ActivityTriggerConverter.encode(value, expected_type=None)
+    encoded = _encode_activity(value)
     token = json.loads(encoded.value)
     assert store.is_known_token(token)
     assert json.loads(store.download(token)) == value
-    decoded = ActivityTriggerConverter.decode(
+    decoded = _decode_activity(
         meta.Datum(type=data_type, value=encoded.value), trigger_metadata=None)
     assert decoded == value
-    assert ActivityTriggerConverter.decode(
+    assert _decode_activity(
         meta.Datum(type=data_type, value=token), trigger_metadata=None) == value
 
 
 def test_activity_trigger_keeps_small_payload_inline(monkeypatch, payload_store_factory):
     store = payload_store_factory()
     monkeypatch.setattr(payloads, "_payload_store", store)
-    encoded = ActivityTriggerConverter.encode({"small": True}, expected_type=None)
+    encoded = _encode_activity({"small": True})
     assert json.loads(encoded.value) == {"small": True}
     assert not store._blobs
 
@@ -135,7 +148,7 @@ def test_activity_trigger_payload_size_limit(monkeypatch, payload_store_factory)
     store = payload_store_factory(threshold_bytes=10, max_stored_payload_bytes=100)
     monkeypatch.setattr(payloads, "_payload_store", store)
     with pytest.raises(ValueError, match="exceeds the maximum"):
-        ActivityTriggerConverter.encode("x" * 200, expected_type=None)
+        _encode_activity("x" * 200)
     assert not store._blobs
 
 
@@ -146,7 +159,7 @@ def test_activity_trigger_payload_size_limit(monkeypatch, payload_store_factory)
 def test_activity_trigger_does_not_swallow_download_failure(monkeypatch, payload_store_factory, reference):
     monkeypatch.setattr(payloads, "_payload_store", payload_store_factory())
     with pytest.raises(KeyError):
-        ActivityTriggerConverter.decode(
+        _decode_activity(
             meta.Datum(type="string", value=reference),
             trigger_metadata=None)
     with pytest.raises(KeyError):
@@ -159,11 +172,11 @@ def test_whole_payload_token_string_is_reserved(monkeypatch, payload_store_facto
     stored_value = {"stored": "payload contents"}
     reference = store.upload(json.dumps(stored_value).encode())
 
-    encoded = ActivityTriggerConverter.encode(reference, expected_type=None)
+    encoded = _encode_activity(reference)
 
     assert encoded.value == json.dumps(reference)
     assert len(store._blobs) == 1
-    assert ActivityTriggerConverter.decode(encoded, trigger_metadata=None) == stored_value
+    assert _decode_activity(encoded) == stored_value
     assert FunctionsDataConverter().deserialize(encoded.value) == stored_value
 
 
@@ -178,10 +191,10 @@ def test_object_wrapped_reference_round_trips_as_data(
         reference = store.upload(b'{"stored":"not the literal reference"}')
     value = {"reference": reference}
 
-    encoded = ActivityTriggerConverter.encode(value, expected_type=None)
+    encoded = _encode_activity(value)
 
     assert len(store._blobs) == int(reference_exists) + int(threshold_bytes == 10)
-    assert ActivityTriggerConverter.decode(encoded, trigger_metadata=None) == value
+    assert _decode_activity(encoded) == value
     assert FunctionsDataConverter().deserialize(encoded.value) == value
 
 
@@ -208,6 +221,22 @@ async def test_transport_store_async_references(monkeypatch, payload_store_facto
     assert await transport.download_async(json.loads(token)) == value
     assert not transport.is_known_token('{"ordinary":"object"}')
     assert not transport.is_known_token('"ordinary string"')
+
+
+def test_reference_detection_skips_non_string_json(monkeypatch, payload_store_factory):
+    store = payload_store_factory()
+    monkeypatch.setattr(payloads, "_payload_store", store)
+    transport = payloads.get_transport_payload_store()
+    token = store.upload(b'"value"')
+    assert transport.is_known_token(" \r\n\t" + json.dumps(token))
+    assert transport.is_known_token('"\\u0062lob:v1:test-container:blob-0"')
+
+    def unexpected_parse(value):
+        raise AssertionError("Non-string payload should not be parsed")
+
+    monkeypatch.setattr(payloads.json, "loads", unexpected_parse)
+    for value in (' {"result":"example"}', '["example"]', 'null', 'true', '42', token):
+        assert transport.is_known_token(value) == (value == token)
 
 
 # ---------------------------------------------------------------------------

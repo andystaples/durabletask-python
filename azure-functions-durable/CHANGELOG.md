@@ -13,7 +13,10 @@ ADDED
 payloads using a shared payload store, including Azure Blob Storage. Configuration
 applies to synchronous and asynchronous clients, orchestration and activity
 inputs and outputs, custom status, external events, entity state and results,
-and registered blueprints.
+and registered blueprints. History APIs also hydrate entity operation inputs
+and results. Activity payload storage preserves synchronous and asynchronous
+execution without blocking the host event loop with synchronous storage calls.
+Worker payload-size and storage errors retain their original error details.
 
 ## v2.0.0rc1
 

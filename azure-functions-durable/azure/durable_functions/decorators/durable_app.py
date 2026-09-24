@@ -20,7 +20,7 @@ from ..http.builtin import (
     builtin_http_activity,
     builtin_http_poll_orchestrator,
 )
-from ..internal.compat.activity import wrap_activity
+from ..internal.compat.activity import wrap_activity, wrap_activity_payloads
 from ..worker import DurableFunctionsWorker
 from ..orchestrator import Orchestrator
 
@@ -327,7 +327,7 @@ class Blueprint(TriggerApi, BindingApi):
             # Adapt a durabletask-native two-argument activity ((ctx, input))
             # to the host's single-input convention; one-argument activities
             # pass through unchanged.
-            return wrap(wrap_activity(user_fn, input_name))
+            return wrap(wrap_activity_payloads(wrap_activity(user_fn, input_name), input_name))
 
         return decorator
 
