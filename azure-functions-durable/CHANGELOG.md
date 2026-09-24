@@ -14,8 +14,10 @@ payloads using a shared payload store, including Azure Blob Storage. Configurati
 applies to synchronous and asynchronous clients, orchestration and activity
 inputs and outputs, custom status, external events, entity state and results,
 and registered blueprints. History APIs also hydrate entity operation inputs
-and results. Activity payload storage preserves synchronous and asynchronous
-execution without blocking the host event loop with synchronous storage calls.
+and results. Registered orchestration, entity, and activity handlers await
+asynchronous payload storage without occupying synchronous execution threads.
+User orchestrators remain generators, synchronous functions retain synchronous
+client bindings, and invocation logging context is preserved.
 Worker payload-size and storage errors retain their original error details.
 
 ## v2.0.0rc1

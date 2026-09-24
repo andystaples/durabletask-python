@@ -14,8 +14,11 @@ from durabletask.entities import EntityInstanceId
 bp = df.Blueprint()
 
 
+@bp.durable_client_input(client_name="client")
 @bp.activity_trigger(input_name="payload")
-def payload_echo(payload: dict) -> dict:
+def payload_echo(payload: dict, client: df.SyncDurableFunctionsClient, context: func.Context) -> dict:
+    assert isinstance(client, df.SyncDurableFunctionsClient)
+    assert context.thread_local_storage.invocation_id == context.invocation_id
     return {"data": payload["data"], "stages": [*payload["stages"], "activity"]}
 
 
@@ -28,7 +31,9 @@ def payload_roundtrip(ctx: task.OrchestrationContext, payload: dict[str, Any]):
 
 
 @bp.activity_trigger(input_name="payload")
-async def payload_echo_async(payload: dict) -> dict:
+@bp.durable_client_input(client_name="client")
+async def payload_echo_async(payload: dict, client: df.DurableFunctionsClient) -> dict:
+    assert isinstance(client, df.DurableFunctionsClient)
     return {"data": payload["data"], "stages": [*payload["stages"], "activity"]}
 
 

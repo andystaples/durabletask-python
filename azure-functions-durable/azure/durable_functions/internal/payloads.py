@@ -6,6 +6,7 @@
 import json
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from typing import Any, cast, override
 from uuid import UUID
 
@@ -13,7 +14,9 @@ from google.protobuf.wrappers_pb2 import StringValue
 
 from durabletask import history
 from durabletask.entities import EntityInstanceId
-from durabletask.internal.orchestrator_service_pb2 import ActivityRequest, ActivityResponse
+from durabletask.internal.orchestrator_service_pb2 import (
+    ActivityRequest, ActivityResponse, HistoryEvent, OrchestratorRequest,
+)
 from durabletask.payload import (
     LargePayloadStorageOptions,
     PayloadStore,
@@ -209,3 +212,31 @@ async def hydrate_entity_history_async(
         if request.input.value != envelope[field]:
             envelope[field] = request.input.value
             event.input = json.dumps(envelope)
+
+
+def _entity_request_events(request: OrchestratorRequest) -> list[tuple[HistoryEvent, history.HistoryEvent]]:
+    return [
+        (event, history._from_protobuf(event))  # pyright: ignore[reportPrivateUsage]
+        for event in chain(request.pastEvents, request.newEvents)
+        if event.WhichOneof("eventType") in ("eventSent", "eventRaised", "entityOperationCalled")
+    ]
+
+
+def _update_entity_request_events(events: list[tuple[HistoryEvent, history.HistoryEvent]]) -> None:
+    for source, event in events:
+        if isinstance(event, history.EventSentEvent) and event.input is not None:
+            source.eventSent.input.value = event.input
+        elif isinstance(event, history.EventRaisedEvent) and event.input is not None:
+            source.eventRaised.input.value = event.input
+
+
+def hydrate_entity_request(request: OrchestratorRequest, store: PayloadStore) -> None:
+    events = _entity_request_events(request)
+    hydrate_entity_history([event for _, event in events], store, request.instanceId)
+    _update_entity_request_events(events)
+
+
+async def hydrate_entity_request_async(request: OrchestratorRequest, store: PayloadStore) -> None:
+    events = _entity_request_events(request)
+    await hydrate_entity_history_async([event for _, event in events], store, request.instanceId)
+    _update_entity_request_events(events)

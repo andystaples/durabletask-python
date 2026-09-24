@@ -3,8 +3,11 @@
 
 import azure.durable_functions as df
 import inspect
+import threading
+from contextvars import ContextVar
+from types import SimpleNamespace
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from azure.durable_functions.constants import (
     ACTIVITY_TRIGGER,
     DURABLE_CLIENT,
@@ -31,7 +34,7 @@ def test_orchestration_trigger_v1_signature():
         context_name="context", orchestration="MyOrchestrator")(my_orchestrator)
     trigger = _trigger(fb)
     assert trigger.get_binding_name() == ORCHESTRATION_TRIGGER
-    assert trigger.name == "context"
+    assert trigger.name == "_durable_input"
     assert trigger.orchestration == "MyOrchestrator"
 
 
@@ -66,7 +69,7 @@ def test_activity_trigger_v1_signature():
     assert trigger.activity == "MyActivity"
 
 
-def test_activity_trigger_adapts_durabletask_native_two_param():
+async def test_activity_trigger_adapts_durabletask_native_two_param():
     app = df.DFApp()
 
     def my_activity(ctx, payload):
@@ -82,9 +85,9 @@ def test_activity_trigger_adapts_durabletask_native_two_param():
     # ``input_name``, invoking the original with a placeholder activity context.
     import inspect
     registered = fb._function._func
-    assert list(inspect.signature(registered).parameters) == ["payload"]
+    assert list(inspect.signature(registered).parameters) == ["payload", "context"]
     assert registered.__name__ == "my_activity"
-    assert registered("hello") == {"echo": "hello"}
+    assert await registered("hello") == {"echo": "hello"}
 
 
 # ---------------------------------------------------------------------------
@@ -101,11 +104,11 @@ def test_entity_trigger_v1_signature():
         context_name="context", entity_name="MyEntity")(my_entity)
     trigger = _trigger(fb)
     assert trigger.get_binding_name() == ENTITY_TRIGGER
-    assert trigger.name == "context"
+    assert trigger.name == "_durable_input"
     assert trigger.entity_name == "MyEntity"
 
 
-def test_entity_trigger_reuses_worker_across_invocations():
+async def test_entity_trigger_reuses_worker_across_invocations():
     app = df.DFApp()
 
     def my_entity(context):
@@ -115,17 +118,17 @@ def test_entity_trigger_reuses_worker_across_invocations():
         "azure.durable_functions.decorators.durable_app.DurableFunctionsWorker"
     ) as worker_cls:
         worker = worker_cls.return_value
-        worker.execute_entity_batch_request.return_value = "encoded"
+        worker.execute_entity_batch_request_async = AsyncMock(return_value="encoded")
         fb = app.entity_trigger(context_name="context")(my_entity)
         handle = fb._function._func
         first_context = MagicMock()
         second_context = MagicMock()
-        first_result = handle(first_context)
-        second_result = handle(second_context)
+        first_result = await handle(first_context)
+        second_result = await handle(second_context)
 
     assert first_result == second_result == "encoded"
     worker_cls.assert_called_once_with()
-    assert worker.execute_entity_batch_request.call_args_list == [
+    assert worker.execute_entity_batch_request_async.call_args_list == [
         ((my_entity, first_context),),
         ((my_entity, second_context),),
     ]
@@ -208,6 +211,50 @@ async def test_durable_client_input_replaces_unsupported_client_annotation():
     fb = app.durable_client_input(client_name="client")(starter)
     assert fb._function._func.__annotations__["client"] is str
     assert starter.__annotations__["client"] is int
+
+
+@pytest.mark.parametrize("client_outer", [False, True])
+@pytest.mark.parametrize("user_async", [False, True])
+async def test_activity_client_binding_preserves_user_type_and_invocation_context(client_outer, user_async):
+    app = df.DFApp()
+    host_thread = threading.get_ident()
+    invocation = SimpleNamespace(invocation_id="test-invocation", thread_local_storage=threading.local())
+    invocation.thread_local_storage.invocation_id = invocation.invocation_id
+    trace = ContextVar("test_trace", default=None)
+    trace.set("trace-value")
+
+    def activity(payload, client, context):
+        assert context is invocation
+        assert context.thread_local_storage.invocation_id == context.invocation_id
+        assert trace.get() == "trace-value"
+        assert (threading.get_ident() == host_thread) == user_async
+        assert isinstance(client, df.DurableFunctionsClient if user_async else df.SyncDurableFunctionsClient)
+        return payload
+
+    async def async_activity(payload, client, context):
+        return activity(payload, client, context)
+
+    function = async_activity if user_async else activity
+    activity_decorator = app.activity_trigger(input_name="payload")
+    client_decorator = app.durable_client_input(client_name="client")
+    registered = (client_decorator(activity_decorator(function)) if client_outer
+                  else activity_decorator(client_decorator(function)))
+    assert inspect.iscoroutinefunction(registered._function._func)
+    assert await registered._function._func(payload="result", client="{}", context=invocation) == "result"
+
+
+async def test_activity_context_trigger_name_does_not_hide_invocation_context():
+    app = df.DFApp()
+    invocation = SimpleNamespace(invocation_id="activity-id", thread_local_storage=threading.local())
+
+    def activity(context):
+        assert invocation.thread_local_storage.invocation_id == invocation.invocation_id
+        return context
+
+    registered = app.activity_trigger(input_name="context")(activity)
+    trigger_name = _trigger(registered).name
+    assert trigger_name != "context"
+    assert await registered._function._func(**{trigger_name: "input", "context": invocation}) == "input"
 
 
 # ---------------------------------------------------------------------------

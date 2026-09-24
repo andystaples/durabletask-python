@@ -84,7 +84,7 @@ access across deployments. Keep the store open for the process lifetime.
 > orchestration does not delete its payload blobs; manage retention separately.
 
 This is SDK-managed storage, separate from the Azure Storage backend's automatic
-large-message handling. Without configuration, existing behavior is unchanged.
+large-message handling. Without configuration, the SDK keeps payloads inline.
 Use the configured Python clients to retrieve hydrated payloads. Host management
 HTTP endpoints and other consumers that do not use this configuration can expose
 reference strings instead. Applications exchanging externalized payloads must
@@ -97,10 +97,22 @@ agree on the store and reference encoding; Functions references are JSON strings
 > host abandons and redelivers a work item after a storage failure. A transient
 > storage error can therefore become a terminal orchestration failure.
 
-Activity payload storage runs within the invocation: synchronous activities use
-the host's activity thread, and asynchronous activities await the store's async
-methods. Both client history APIs hydrate entity operation inputs and results,
-including values nested in the host's entity protocol envelopes.
+Registered orchestration, entity, and activity handlers await the store's async
+methods before and after execution, including for synchronous user functions.
+Orchestrators remain synchronous generators; entities and synchronous activities
+run on execution threads with their invocation logging context preserved.
+Payload downloads and uploads do not occupy those threads, and serialization
+does not access storage during replay. Custom stores must implement genuinely
+nonblocking async methods to benefit from this behavior.
+
+The SDK reuses the Functions runtime's thread pool when the runtime exposes it;
+otherwise it uses a process-wide SDK pool. Both honor
+`PYTHON_THREADPOOL_THREAD_COUNT` for synchronous execution. Synchronous user
+functions still receive the synchronous durable client, and synchronous client
+APIs still use synchronous storage. Both client history APIs hydrate entity
+operation inputs and results, including values nested in the host's entity
+protocol envelopes. Direct `Orchestrator.handle()` and `Orchestrator.create()`
+adapters also remain synchronous.
 
 > [!WARNING]
 > With payload storage configured, whole payload strings recognized by the

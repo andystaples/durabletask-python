@@ -16,8 +16,6 @@ from typing import Any, override
 
 from durabletask.serialization import JsonDataConverter
 
-from .payloads import deexternalize_payload
-
 
 class FunctionsDataConverter(JsonDataConverter):
     """:class:`DataConverter` that serializes via azure-functions' codec.
@@ -46,7 +44,7 @@ class FunctionsDataConverter(JsonDataConverter):
     def deserialize(self, data: str | None, target_type: type | None = None) -> Any:
         if data is None or data == "":
             return None
-        return df_loads(deexternalize_payload(data), expected_type=target_type)
+        return df_loads(data, expected_type=target_type)
 
     @override
     def coerce(self, value: Any, target_type: type | None = None) -> Any:

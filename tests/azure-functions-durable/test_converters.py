@@ -10,6 +10,7 @@ that the converters use the durabletask-based encodings the host expects.
 """
 
 
+import asyncio
 import json
 
 import pytest
@@ -36,14 +37,14 @@ from azure.durable_functions.internal.compat.activity import wrap_activity_paylo
 
 
 def _encode_activity(value):
-    result = wrap_activity_payloads(lambda payload: payload, "payload")(value)
+    result = asyncio.run(wrap_activity_payloads(lambda payload: payload, "payload")(value))
     return ActivityTriggerConverter.encode(result, expected_type=None)
 
 
 def _decode_activity(datum, **kwargs):
     received = []
     wrapper = wrap_activity_payloads(lambda payload: received.append(payload), "payload")
-    wrapper(ActivityTriggerConverter.decode(datum, trigger_metadata=None))
+    asyncio.run(wrapper(ActivityTriggerConverter.decode(datum, trigger_metadata=None)))
     return received[0]
 
 
@@ -162,8 +163,6 @@ def test_activity_trigger_does_not_swallow_download_failure(monkeypatch, payload
         _decode_activity(
             meta.Datum(type="string", value=reference),
             trigger_metadata=None)
-    with pytest.raises(KeyError):
-        FunctionsDataConverter().deserialize(reference)
 
 
 def test_whole_payload_token_string_is_reserved(monkeypatch, payload_store_factory):
@@ -177,7 +176,7 @@ def test_whole_payload_token_string_is_reserved(monkeypatch, payload_store_facto
     assert encoded.value == json.dumps(reference)
     assert len(store._blobs) == 1
     assert _decode_activity(encoded) == stored_value
-    assert FunctionsDataConverter().deserialize(encoded.value) == stored_value
+    assert FunctionsDataConverter().deserialize(payloads.deexternalize_payload(encoded.value)) == stored_value
 
 
 @pytest.mark.parametrize("threshold_bytes", [10, 1024])
@@ -195,17 +194,21 @@ def test_object_wrapped_reference_round_trips_as_data(
 
     assert len(store._blobs) == int(reference_exists) + int(threshold_bytes == 10)
     assert _decode_activity(encoded) == value
-    assert FunctionsDataConverter().deserialize(encoded.value) == value
+    assert FunctionsDataConverter().deserialize(payloads.deexternalize_payload(encoded.value)) == value
 
 
-def test_codec_hydrates_nested_entity_response(monkeypatch, payload_store_factory):
+def test_codec_does_not_access_storage(monkeypatch, payload_store_factory):
     store = payload_store_factory()
     monkeypatch.setattr(payloads, "_payload_store", store)
     value = {"data": "x" * 200}
     token = store.upload(json.dumps(value).encode())
+
+    def unexpected_download(token):
+        raise AssertionError("Serialization must not access storage")
+    monkeypatch.setattr(store, "download", unexpected_download)
     converter = FunctionsDataConverter()
     response = converter.deserialize(json.dumps({"result": json.dumps(token)}))
-    assert converter.deserialize(response["result"], dict) == value
+    assert converter.deserialize(response["result"], str) == token
 
 
 @pytest.mark.asyncio

@@ -12,10 +12,11 @@ that path end-to-end without a sidecar or gRPC channel.
 
 import base64
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -76,12 +77,14 @@ def test_worker_created_before_configuration_hydrates_and_externalizes(monkeypat
 
 @pytest.mark.parametrize("entity", [False, True])
 @pytest.mark.parametrize("storage_failure", [False, True])
-def test_worker_preserves_output_error(monkeypatch, payload_store_factory, entity, storage_failure):
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_worker_preserves_output_error(monkeypatch, payload_store_factory, entity, storage_failure, use_async):
     store = payload_store_factory(max_stored_payload_bytes=150)
     error = OSError("payload storage unavailable")
     if storage_failure:
         store = payload_store_factory()
         monkeypatch.setattr(store, "upload", Mock(side_effect=error))
+        monkeypatch.setattr(store, "upload_async", AsyncMock(side_effect=error))
     monkeypatch.setattr(payloads, "_payload_store", store)
 
     def orchestrator(context):
@@ -93,14 +96,123 @@ def test_worker_preserves_output_error(monkeypatch, payload_store_factory, entit
     with pytest.raises(OSError if storage_failure else ValueError) as raised:
         worker = DurableFunctionsWorker()
         if entity:
-            worker.execute_entity_batch_request(counter, _encode_entity_batch_request("@counter@key", "set"))
+            encoded = _encode_entity_batch_request("@counter@key", "set")
+            if use_async:
+                await worker.execute_entity_batch_request_async(counter, encoded)
+            else:
+                worker.execute_entity_batch_request(counter, encoded)
         else:
-            worker.execute_orchestration_request(orchestrator, _encode_orchestrator_request("oversized"))
+            encoded = _encode_orchestrator_request("oversized")
+            if use_async:
+                await worker.execute_orchestration_request_async(orchestrator, encoded)
+            else:
+                worker.execute_orchestration_request(orchestrator, encoded)
     if storage_failure:
         assert raised.value is error
     else:
         assert "202 bytes" in str(raised.value)
         assert "150 bytes" in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entity", [False, True])
+@pytest.mark.parametrize("registered", [False, True])
+async def test_async_worker_uses_only_async_storage(monkeypatch, payload_store_factory, entity, registered):
+    store = payload_store_factory()
+    monkeypatch.setattr(payloads, "_payload_store", store)
+    value = {"data": "x" * 200}
+    token = store.upload(json.dumps(value).encode())
+    download = store.download
+    monkeypatch.setattr(store, "download_async", AsyncMock(side_effect=download))
+    monkeypatch.setattr(store, "upload_async", AsyncMock(side_effect=store.upload))
+    monkeypatch.setattr(store, "download", Mock(side_effect=AssertionError("sync download")))
+    monkeypatch.setattr(store, "upload", Mock(side_effect=AssertionError("sync upload")))
+    host_thread = threading.get_ident()
+    invocation = SimpleNamespace(invocation_id="worker-id", thread_local_storage=threading.local())
+
+    def check_execution_thread():
+        assert threading.get_ident() != host_thread
+        if registered:
+            assert invocation.thread_local_storage.invocation_id == invocation.invocation_id
+
+    def orchestrator(context):
+        check_execution_thread()
+        assert context.get_input() == value
+        return value
+
+    def counter(context):
+        check_execution_thread()
+        assert context.get_input() == value
+        context.set_state(value)
+
+    worker = DurableFunctionsWorker()
+    if registered:
+        app = df.DFApp()
+        builder = (app.entity_trigger(context_name="ctx")(counter) if entity
+                   else app.orchestration_trigger(context_name="ctx")(orchestrator))
+        encoded = (_encode_entity_batch_request("@counter@key", "set", json.dumps(token)) if entity
+                   else _encode_orchestrator_request("async-payload", json.dumps(token)))
+        result = await builder._function._func(ctx=encoded, context=invocation)
+    if entity:
+        if not registered:
+            result = await worker.execute_entity_batch_request_async(
+                counter, _encode_entity_batch_request("@counter@key", "set", json.dumps(token)))
+        output = _decode_entity_response(result).entityState.value
+    else:
+        if not registered:
+            result = await worker.execute_orchestration_request_async(
+                orchestrator, _encode_orchestrator_request("async-payload", json.dumps(token)))
+        output = _get_completion_action(_decode_orchestrator_response(result)).result.value
+    assert json.loads(download(json.loads(output))) == value
+    store.download_async.assert_awaited_once()
+    store.upload_async.assert_awaited_once()
+
+
+@pytest.mark.parametrize("modern_request", [False, True])
+@pytest.mark.parametrize("storage_failure", [False, True])
+async def test_async_worker_hydrates_entity_envelopes_before_execution(
+        monkeypatch, payload_store_factory, modern_request, storage_failure):
+    store = payload_store_factory()
+    monkeypatch.setattr(payloads, "_payload_store", store)
+    value = '{"data":"hydrated"}'
+    token = json.dumps(store.upload(value.encode()))
+    error = OSError("nested download failed")
+    monkeypatch.setattr(store, "download_async", AsyncMock(side_effect=error if storage_failure else store.download))
+    monkeypatch.setattr(store, "download", Mock(side_effect=AssertionError("sync download")))
+    request = pb.OrchestratorRequest(instanceId=TEST_INSTANCE_ID)
+    request_id = "63c281d7-02d7-412c-9f66-1d6d26a83948"
+    sent = request.pastEvents.add(eventId=1)
+    if modern_request:
+        sent.entityOperationCalled.requestId = request_id
+    else:
+        sent.eventSent.instanceId = "@counter@one"
+        sent.eventSent.name = "op"
+        sent.eventSent.input.value = json.dumps({
+            "id": request_id, "op": "get", "parent": TEST_INSTANCE_ID, "input": token})
+    reply = request.newEvents.add(eventId=2)
+    reply.eventRaised.name = request_id
+    reply.eventRaised.input.value = json.dumps({"result": token})
+    unrelated = request.newEvents.add(eventId=3)
+    unrelated.eventRaised.name = "application-event"
+    unrelated.eventRaised.input.value = reply.eventRaised.input.value
+    worker = DurableFunctionsWorker()
+    execution = Mock(return_value=pb.OrchestratorResponse())
+    monkeypatch.setattr(worker, "_run_orchestration", execution)
+    encoded = base64.b64encode(request.SerializeToString()).decode()
+    if storage_failure:
+        with pytest.raises(OSError) as raised:
+            await worker.execute_orchestration_request_async(Mock(), encoded)
+        assert raised.value is error
+        execution.assert_not_called()
+        store.download_async.assert_awaited_once()
+    else:
+        await worker.execute_orchestration_request_async(Mock(), encoded)
+        hydrated = execution.call_args.args[1]
+        assert json.loads(hydrated.newEvents[0].eventRaised.input.value)["result"] == value
+        assert hydrated.newEvents[1] == unrelated
+        if not modern_request:
+            assert json.loads(hydrated.pastEvents[0].eventSent.input.value)["input"] == value
+        assert store.download_async.await_count == (1 if modern_request else 2)
 
 
 def _encode_orchestrator_request(name, encoded_input=None, instance_id=TEST_INSTANCE_ID):

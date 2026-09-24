@@ -21,8 +21,8 @@ from ..http.builtin import (
     builtin_http_poll_orchestrator,
 )
 from ..internal.compat.activity import wrap_activity, wrap_activity_payloads
+from ..internal.invocation import wrap_invocation
 from ..worker import DurableFunctionsWorker
-from ..orchestrator import Orchestrator
 
 
 class Blueprint(TriggerApi, BindingApi):
@@ -167,6 +167,7 @@ class Blueprint(TriggerApi, BindingApi):
     def _configure_orchestrator_callable(
             self,
             wrap: Callable[[Callable[..., Any]], FunctionBuilder],
+            context_name: str,
             input_type: Optional[type] = None
     ) -> Callable[[task.Orchestrator[Any, Any]], FunctionBuilder]:
         """Obtain decorator to construct an Orchestrator class from a user-defined Function.
@@ -194,7 +195,13 @@ class Blueprint(TriggerApi, BindingApi):
                 # feed it to a v1-style ``context.get_input()``.
                 orchestrator_func._df_input_type = input_type  # type: ignore[attr-defined]  # noqa: E501
 
-            handle = Orchestrator.create(orchestrator_func)
+            worker = DurableFunctionsWorker()
+
+            async def handle(context: func.OrchestrationContext) -> str:
+                return await worker.execute_orchestration_request_async(orchestrator_func, context)
+
+            handle.orchestrator_function = orchestrator_func  # pyright: ignore[reportFunctionMemberAccess]
+            handle = wrap_invocation(handle, "context", registered_trigger_name=context_name)
 
             # invoke next decorator, with the Orchestrator as input
             handle.__name__ = orchestrator_func.__name__
@@ -205,6 +212,7 @@ class Blueprint(TriggerApi, BindingApi):
     def _configure_entity_callable(
             self,
             wrap: Callable[[Callable[..., Any]], FunctionBuilder],
+            context_name: str,
             entity_name: Optional[str] = None
     ) -> Callable[[task.Entity[Any, Any]], FunctionBuilder]:
         """Obtain decorator to construct an Entity class from a user-defined Function.
@@ -236,18 +244,16 @@ class Blueprint(TriggerApi, BindingApi):
             # Construct an orchestrator based on the end-user code
             worker = DurableFunctionsWorker()
 
-            # TODO: Because this handle method is the one actually exposed to the Functions SDK decorator,
-            #       the parameter name will always be "context" here, even if the user specified a different name.
-            #       We need to find a way to allow custom context names (like "ctx").
             # The generated handle is what the Azure Functions host registers,
             # so its ``context`` parameter must be annotated with
             # ``azure.functions.EntityContext`` for the host's entityTrigger
             # binding converter to accept it; at runtime the host passes that
             # transport context (exposing ``.body``).
-            def handle(context: func.EntityContext) -> str:
-                return worker.execute_entity_batch_request(entity_func, context)
+            async def handle(context: func.EntityContext) -> str:
+                return await worker.execute_entity_batch_request_async(entity_func, context)
 
             handle.entity_function = entity_func  # pyright: ignore[reportFunctionMemberAccess]
+            handle = wrap_invocation(handle, "context", registered_trigger_name=context_name)
 
             # invoke next decorator, with the Entity as input
             handle.__name__ = entity_func.__name__
@@ -295,14 +301,15 @@ class Blueprint(TriggerApi, BindingApi):
         def wrap(fb: FunctionBuilder) -> FunctionBuilder:
 
             def decorator() -> FunctionBuilder:
+                registered = fb._function._func  # pyright: ignore[reportPrivateUsage]
                 fb.add_trigger(
-                    trigger=OrchestrationTrigger(name=context_name,
+                    trigger=OrchestrationTrigger(name=getattr(registered, "_df_trigger_name", context_name),
                                                  orchestration=orchestration))
                 return fb
 
             return decorator()
 
-        return self._configure_orchestrator_callable(wrap, input_type=input_type)
+        return self._configure_orchestrator_callable(wrap, context_name, input_type=input_type)
 
     def activity_trigger(self, input_name: str,
                          activity: Optional[str] = None
@@ -319,15 +326,23 @@ class Blueprint(TriggerApi, BindingApi):
         """
         @self._build_function
         def wrap(fb: FunctionBuilder) -> FunctionBuilder:
+            registered = fb._function._func  # pyright: ignore[reportPrivateUsage]
             fb.add_trigger(
-                trigger=ActivityTrigger(name=input_name, activity=activity))
+                trigger=ActivityTrigger(name=getattr(registered, "_df_trigger_name", input_name), activity=activity))
             return fb
 
         def decorator(user_fn: Callable[..., Any]) -> FunctionBuilder:
             # Adapt a durabletask-native two-argument activity ((ctx, input))
             # to the host's single-input convention; one-argument activities
             # pass through unchanged.
-            return wrap(wrap_activity_payloads(wrap_activity(user_fn, input_name), input_name))
+            function = (user_fn._function._func  # pyright: ignore[reportPrivateUsage]
+                        if isinstance(user_fn, FunctionBuilder) else user_fn)
+            registered = wrap_invocation(
+                wrap_activity_payloads(wrap_activity(function, input_name), input_name), input_name)
+            if isinstance(user_fn, FunctionBuilder):
+                user_fn._function._func = registered  # pyright: ignore[reportPrivateUsage]
+                return wrap(user_fn)
+            return wrap(registered)
 
         return decorator
 
@@ -348,14 +363,15 @@ class Blueprint(TriggerApi, BindingApi):
         @self._build_function
         def wrap(fb: FunctionBuilder) -> FunctionBuilder:
             def decorator() -> FunctionBuilder:
+                registered = fb._function._func  # pyright: ignore[reportPrivateUsage]
                 fb.add_trigger(
-                    trigger=EntityTrigger(name=context_name,
+                    trigger=EntityTrigger(name=getattr(registered, "_df_trigger_name", context_name),
                                           entity_name=entity_name))
                 return fb
 
             return decorator()
 
-        return self._configure_entity_callable(wrap, entity_name)
+        return self._configure_entity_callable(wrap, context_name, entity_name)
 
     def durable_client_input(self,
                              client_name: str,
@@ -409,6 +425,7 @@ class Blueprint(TriggerApi, BindingApi):
                         if isinstance(user_fn, FunctionBuilder) else user_fn)
             signature = inspect.signature(function)
             is_async_function = inspect.iscoroutinefunction(function)
+            is_async_user = getattr(function, "_df_user_is_async", is_async_function)
 
             def bind_client(
                     args: tuple[Any, ...],
@@ -423,7 +440,7 @@ class Blueprint(TriggerApi, BindingApi):
                 if not isinstance(raw_client, str):
                     raise TypeError(
                         f"durable client binding '{client_name}' did not provide its configuration")
-                client = (DurableFunctionsClient(raw_client) if is_async_function
+                client = (DurableFunctionsClient(raw_client) if is_async_user
                           else SyncDurableFunctionsClient.get_cached(raw_client))
                 bound.arguments[client_name] = client
                 return bound, client
