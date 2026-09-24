@@ -32,6 +32,64 @@ Key capabilities include durable orchestrations and sub-orchestrations, durable
 timers, external events, durable entities, retries, versioning, durable HTTP
 calls (`context.call_http(...)`), recurring scheduled tasks, and history export.
 
+## Large payloads
+
+Configure a `durabletask.payload.PayloadStore` once at app startup to store large
+serialized payloads outside orchestration history. For Azure Blob Storage, install
+the optional dependencies:
+
+```bash
+pip install azure-functions-durable "durabletask[azure-blob-payloads]" aiohttp
+```
+
+In your Function app, configure the root `DFApp` before any invocations:
+
+```python
+import os
+
+import azure.durable_functions as df
+from durabletask.extensions.azure_blob_payloads import (
+    BlobPayloadStore,
+    BlobPayloadStoreOptions,
+)
+
+app = df.DFApp()
+app.configure_large_payloads(
+    payload_store=BlobPayloadStore(BlobPayloadStoreOptions(
+        connection_string=os.environ["PAYLOAD_STORAGE_CONNECTION_STRING"],
+        container_name="durable-payloads",
+        threshold_bytes=256 * 1024,
+    ))
+)
+```
+
+Set `PAYLOAD_STORAGE_CONNECTION_STRING` in your Function app settings (or in
+`local.settings.json` for local development). The store automatically uploads
+serialized payloads above the threshold and downloads their contents when the
+SDK consumes them. Orchestration and activity inputs and outputs, custom status,
+external events, and entity inputs, results, and state use the configured store.
+Sub-orchestrations and continue-as-new use it as well. The default maximum stored
+payload size is 10 MiB; `max_stored_payload_bytes` can configure this limit.
+
+Configuration applies to both synchronous and asynchronous durable clients and
+all registered blueprints, including blueprints imported before configuration.
+There is one store per Python worker process. Registering the same store object
+again is allowed; registering a different object raises `ValueError`. Configure
+every scaled-out worker with access to the same backing storage and retain that
+access across deployments. Keep the store open for the process lifetime.
+
+> [!WARNING]
+> Keep payload blobs for as long as any retained orchestration history or entity
+> state references them, including histories needed for replay. Purging an
+> orchestration does not delete its payload blobs; manage retention separately.
+
+This is SDK-managed storage, separate from the Azure Storage backend's automatic
+large-message handling. Without configuration, existing behavior is unchanged.
+Use the configured Python clients to retrieve hydrated payloads. Host management
+HTTP endpoints and other consumers that do not use this configuration can expose
+reference strings instead. Applications exchanging externalized payloads must
+agree on the store and reference encoding; Functions references are JSON strings.
+
 ## Unit testing entities
 
 Use `execute_entity()` to run one entity operation in-process without a

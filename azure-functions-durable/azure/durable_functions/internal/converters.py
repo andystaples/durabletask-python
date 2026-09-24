@@ -42,6 +42,7 @@ from ..constants import (
     ENTITY_TRIGGER,
     ORCHESTRATION_TRIGGER,
 )
+from .payloads import deexternalize_payload, externalize_activity_output
 
 _TriggerMetadata = Optional[Mapping[str, meta.Datum]]
 
@@ -136,11 +137,12 @@ class ActivityTriggerConverter(meta.InConverter,
         # carrying a custom-object envelope surfaces as TypeError below and is
         # re-raised as ValueError.
         if data_type in ['string', 'json']:
+            value = deexternalize_payload(data.value)
             try:
-                result = df_loads(data.value)
+                result = df_loads(value)
             except json.JSONDecodeError:
                 # String failover if the content is not json serializable
-                result = data.value
+                result = value
             except Exception as e:
                 raise ValueError(
                     'activity trigger input must be a string or a '
@@ -160,7 +162,7 @@ class ActivityTriggerConverter(meta.InConverter,
             raise ValueError(
                 f'activity trigger output must be json serializable ({obj})') from e
 
-        return meta.Datum(type='json', value=result)
+        return meta.Datum(type='json', value=externalize_activity_output(result))
 
     @classmethod
     def has_implicit_output(cls) -> bool:

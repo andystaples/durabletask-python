@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+ADDED
+
+- Added `DFApp.configure_large_payloads(payload_store=...)` to externalize large
+payloads using a shared payload store, including Azure Blob Storage. Configuration
+applies to synchronous and asynchronous clients, orchestration and activity
+inputs and outputs, custom status, external events, entity state and results,
+and registered blueprints.
+
 ## v2.0.0rc1
 
 CHANGED

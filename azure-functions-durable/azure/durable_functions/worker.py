@@ -18,6 +18,7 @@ from durabletask.worker import TaskHubGrpcWorker
 from .internal.azurefunctions_null_stub import AzureFunctionsNullStub
 from .internal.compat.entity_context import wrap_entity
 from .internal.compat.orchestration_context import wrap_orchestrator
+from .internal.payloads import get_transport_payload_store
 from .internal.serialization import DEFAULT_FUNCTIONS_DATA_CONVERTER
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class DurableFunctionsWorker(TaskHubGrpcWorker):
         # the wire format the Durable Functions host extension expects.
         super().__init__(
             data_converter=DEFAULT_FUNCTIONS_DATA_CONVERTER,
+            payload_store=get_transport_payload_store(),
             emit_trace_spans=False,
             logger=_LOGGER,
         )
@@ -84,6 +86,7 @@ class DurableFunctionsWorker(TaskHubGrpcWorker):
             self._registered_entity_functions[name] = func
 
     def execute_orchestration_request(self, func: task.Orchestrator[Any, Any], context: Any) -> str:
+        self._payload_store = get_transport_payload_store()
         context_body = getattr(context, "body", None)
         if context_body is None:
             context_body = context
@@ -118,6 +121,7 @@ class DurableFunctionsWorker(TaskHubGrpcWorker):
         return base64.b64encode(response.SerializeToString()).decode("utf-8")
 
     def execute_entity_batch_request(self, func: task.Entity[Any, Any], context: Any) -> str:
+        self._payload_store = get_transport_payload_store()
         context_body = getattr(context, "body", None)
         if context_body is None:
             context_body = context

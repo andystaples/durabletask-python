@@ -10,6 +10,7 @@ from azure.functions import FunctionRegister, TriggerApi, BindingApi, AuthLevel
 from azure.functions.decorators.function_app import DecoratorApi, FunctionBuilder
 
 from durabletask import task
+from durabletask.payload import PayloadStore
 
 from .metadata import OrchestrationTrigger, ActivityTrigger, EntityTrigger, \
     DurableClient
@@ -476,6 +477,19 @@ class DFApp(Blueprint, FunctionRegister):
 
     Exports the decorators required to declare and index DF Function-types.
     """
+
+    def configure_large_payloads(self, *, payload_store: PayloadStore) -> None:
+        """Enable payload externalization for this app and its blueprints.
+
+        Call once at app startup in every worker process, before invocations.
+        The store is shared by all durable clients, orchestrations, entities,
+        and activities in the process. All scaled-out workers must have access
+        to the same backing storage. Registering a different store in the same
+        process raises ValueError. Re-registering the same object is allowed.
+        """
+        from ..internal.payloads import configure_payload_store
+
+        configure_payload_store(payload_store)
 
     def register_functions(self, function_container: DecoratorApi) -> None:
         """Register the functions of a blueprint into this app.

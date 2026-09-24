@@ -26,6 +26,7 @@ from .internal.azurefunctions_grpc_interceptor import (
     AzureFunctionsDefaultClientInterceptorImpl,
 )
 from .internal.serialization import DEFAULT_FUNCTIONS_DATA_CONVERTER
+from .internal.payloads import get_transport_payload_store
 from .http.http_management_payload import HttpManagementPayload, replace_url_origin
 from .internal.compat.durable_orchestration_status import DurableOrchestrationStatus
 from .internal.compat.entity_state_response import EntityStateResponse
@@ -178,6 +179,7 @@ class DurableFunctionsClient(AsyncTaskHubGrpcClient):
             interceptors=interceptors,
             channel_options=channel_options,
             data_converter=DEFAULT_FUNCTIONS_DATA_CONVERTER,
+            payload_store=get_transport_payload_store(),
             emit_trace_spans=False,
             logger=_LOGGER)
 
@@ -664,6 +666,7 @@ class SyncDurableFunctionsClient(TaskHubGrpcClient):
             interceptors=interceptors,
             channel_options=channel_options,
             data_converter=DEFAULT_FUNCTIONS_DATA_CONVERTER,
+            payload_store=get_transport_payload_store(),
             emit_trace_spans=False,
             logger=_LOGGER)
 

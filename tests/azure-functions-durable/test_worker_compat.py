@@ -15,6 +15,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -22,15 +23,55 @@ import durabletask.internal.helpers as helpers
 import durabletask.internal.orchestrator_service_pb2 as pb
 
 import azure.durable_functions as df
+from azure.durable_functions.internal import payloads
 from azure.durable_functions.worker import DurableFunctionsWorker
+from durabletask.payload import PayloadStore
+from tests.durabletask.test_large_payload import FakePayloadStore
 
 TEST_INSTANCE_ID = "inst-123"
+
+
+def test_configure_large_payloads_reaches_workers(monkeypatch):
+    monkeypatch.setattr(payloads, "_payload_store", None)
+    assert DurableFunctionsWorker()._payload_store is None
+    store = Mock(spec=PayloadStore)
+    app = df.DFApp()
+    app.configure_large_payloads(payload_store=store)
+    app.configure_large_payloads(payload_store=store)
+    assert DurableFunctionsWorker()._payload_store._store is store
+    with pytest.raises(ValueError, match="different payload store"):
+        app.configure_large_payloads(payload_store=Mock(spec=PayloadStore))
+    assert payloads.get_payload_store() is store
+    with pytest.raises(TypeError, match="must be a PayloadStore"):
+        app.configure_large_payloads(payload_store=None)
 
 
 def test_worker_uses_propagate_only_tracing():
     worker = DurableFunctionsWorker()
 
     assert worker.emit_trace_spans is False
+
+
+def test_worker_created_before_configuration_hydrates_and_externalizes(monkeypatch):
+    monkeypatch.setattr(payloads, "_payload_store", None)
+    worker = DurableFunctionsWorker()
+    store = FakePayloadStore()
+    df.DFApp().configure_large_payloads(payload_store=store)
+    value = {"data": "x" * 200}
+    token = store.upload(json.dumps(value).encode())
+
+    def orchestrator(context):
+        assert context.get_input() == value
+        return value
+
+    encoded = _encode_orchestrator_request("payload-orch", encoded_input=json.dumps(token))
+    response = _decode_orchestrator_response(
+        worker.execute_orchestration_request(orchestrator, encoded))
+    completion = _get_completion_action(response)
+    assert completion.orchestrationStatus == pb.ORCHESTRATION_STATUS_COMPLETED
+    result_token = json.loads(completion.result.value)
+    assert store.is_known_token(result_token)
+    assert json.loads(store.download(result_token)) == value
 
 
 def _encode_orchestrator_request(name, encoded_input=None, instance_id=TEST_INSTANCE_ID):
