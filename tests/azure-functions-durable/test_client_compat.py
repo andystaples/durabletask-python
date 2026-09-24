@@ -24,7 +24,6 @@ from durabletask.client import AsyncTaskHubGrpcClient, OrchestrationStatus
 from durabletask.entities import EntityInstanceId
 from durabletask.task import RetryPolicy
 from azure.durable_functions.internal import payloads
-from tests.durabletask.test_large_payload import FakePayloadStore
 
 
 _CLIENT_CONFIG = json.dumps({
@@ -120,8 +119,8 @@ def test_durable_clients_use_propagate_only_tracing():
 
 
 @pytest.mark.asyncio
-async def test_durable_clients_use_configured_payload_store(monkeypatch):
-    store = FakePayloadStore()
+async def test_durable_clients_use_configured_payload_store(monkeypatch, payload_store_factory):
+    store = payload_store_factory()
     monkeypatch.setattr(payloads, "_payload_store", store)
     sync_client = df.SyncDurableFunctionsClient(_CLIENT_CONFIG)
     async_client = df.DurableFunctionsClient(_CLIENT_CONFIG)

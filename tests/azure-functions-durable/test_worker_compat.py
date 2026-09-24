@@ -26,7 +26,6 @@ import azure.durable_functions as df
 from azure.durable_functions.internal import payloads
 from azure.durable_functions.worker import DurableFunctionsWorker
 from durabletask.payload import PayloadStore
-from tests.durabletask.test_large_payload import FakePayloadStore
 
 TEST_INSTANCE_ID = "inst-123"
 
@@ -52,10 +51,10 @@ def test_worker_uses_propagate_only_tracing():
     assert worker.emit_trace_spans is False
 
 
-def test_worker_created_before_configuration_hydrates_and_externalizes(monkeypatch):
+def test_worker_created_before_configuration_hydrates_and_externalizes(monkeypatch, payload_store_factory):
     monkeypatch.setattr(payloads, "_payload_store", None)
     worker = DurableFunctionsWorker()
-    store = FakePayloadStore()
+    store = payload_store_factory()
     df.DFApp().configure_large_payloads(payload_store=store)
     value = {"data": "x" * 200}
     token = store.upload(json.dumps(value).encode())

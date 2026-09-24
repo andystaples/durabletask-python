@@ -32,7 +32,6 @@ from azure.durable_functions.internal.converters import (
 )
 from azure.durable_functions.internal import payloads
 from azure.durable_functions.internal.serialization import FunctionsDataConverter
-from tests.durabletask.test_large_payload import FakePayloadStore
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +109,8 @@ def test_activity_trigger_decode_falls_back_to_raw_string():
 
 @pytest.mark.parametrize("data_type", ["string", "json"])
 @pytest.mark.parametrize("value", [{"data": "x" * 200}, "x" * 200, ["x" * 200]])
-def test_activity_trigger_externalizes_and_hydrates(monkeypatch, data_type, value):
-    store = FakePayloadStore()
+def test_activity_trigger_externalizes_and_hydrates(monkeypatch, payload_store_factory, data_type, value):
+    store = payload_store_factory()
     monkeypatch.setattr(payloads, "_payload_store", store)
     encoded = ActivityTriggerConverter.encode(value, expected_type=None)
     token = json.loads(encoded.value)
@@ -124,32 +123,32 @@ def test_activity_trigger_externalizes_and_hydrates(monkeypatch, data_type, valu
         meta.Datum(type=data_type, value=token), trigger_metadata=None) == value
 
 
-def test_activity_trigger_keeps_small_payload_inline(monkeypatch):
-    store = FakePayloadStore()
+def test_activity_trigger_keeps_small_payload_inline(monkeypatch, payload_store_factory):
+    store = payload_store_factory()
     monkeypatch.setattr(payloads, "_payload_store", store)
     encoded = ActivityTriggerConverter.encode({"small": True}, expected_type=None)
     assert json.loads(encoded.value) == {"small": True}
     assert not store._blobs
 
 
-def test_activity_trigger_payload_size_limit(monkeypatch):
-    store = FakePayloadStore(threshold_bytes=10, max_stored_payload_bytes=100)
+def test_activity_trigger_payload_size_limit(monkeypatch, payload_store_factory):
+    store = payload_store_factory(threshold_bytes=10, max_stored_payload_bytes=100)
     monkeypatch.setattr(payloads, "_payload_store", store)
     with pytest.raises(ValueError, match="exceeds the maximum"):
         ActivityTriggerConverter.encode("x" * 200, expected_type=None)
     assert not store._blobs
 
 
-def test_activity_trigger_does_not_swallow_download_failure(monkeypatch):
-    monkeypatch.setattr(payloads, "_payload_store", FakePayloadStore())
+def test_activity_trigger_does_not_swallow_download_failure(monkeypatch, payload_store_factory):
+    monkeypatch.setattr(payloads, "_payload_store", payload_store_factory())
     with pytest.raises(KeyError):
         ActivityTriggerConverter.decode(
             meta.Datum(type="string", value="blob:v1:test-container:missing"),
             trigger_metadata=None)
 
 
-def test_codec_hydrates_nested_entity_response(monkeypatch):
-    store = FakePayloadStore()
+def test_codec_hydrates_nested_entity_response(monkeypatch, payload_store_factory):
+    store = payload_store_factory()
     monkeypatch.setattr(payloads, "_payload_store", store)
     value = {"data": "x" * 200}
     token = store.upload(json.dumps(value).encode())
@@ -159,8 +158,8 @@ def test_codec_hydrates_nested_entity_response(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_transport_store_async_references(monkeypatch):
-    store = FakePayloadStore()
+async def test_transport_store_async_references(monkeypatch, payload_store_factory):
+    store = payload_store_factory()
     monkeypatch.setattr(payloads, "_payload_store", store)
     transport = payloads.get_transport_payload_store()
     value = b'{"data":"example"}'
