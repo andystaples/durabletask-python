@@ -90,6 +90,24 @@ HTTP endpoints and other consumers that do not use this configuration can expose
 reference strings instead. Applications exchanging externalized payloads must
 agree on the store and reference encoding; Functions references are JSON strings.
 
+> [!WARNING]
+> With payload storage configured, whole payload strings recognized by the
+> store's `is_known_token()` are reserved references, not literal application
+> data. For `BlobPayloadStore`, this includes strings of the form
+> `blob:v1:<container>:<blobName>`, with nonempty container and blob names.
+> Functions recognizes both raw and JSON-quoted references. A matching string
+> is treated as already externalized on output and downloaded on input, even
+> below the size threshold. Missing or inaccessible references raise errors;
+> they do not fall back to literal strings.
+
+To pass a reference as application data for later retrieval, wrap it in an
+object, for example `{"reference": "blob:v1:container:blob"}`. Reference detection
+does not recursively inspect strings inside application JSON objects. The
+wrapper preserves the literal reference whether the object stays inline or is
+itself externalized. Keep the wrapper whenever passing that value across a
+durable payload boundary; passing its string field alone opts back into reference
+interpretation. Custom payload stores define their own reserved token syntax.
+
 ## Unit testing entities
 
 Use `execute_entity()` to run one entity operation in-process without a

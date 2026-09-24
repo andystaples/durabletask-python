@@ -139,12 +139,50 @@ def test_activity_trigger_payload_size_limit(monkeypatch, payload_store_factory)
     assert not store._blobs
 
 
-def test_activity_trigger_does_not_swallow_download_failure(monkeypatch, payload_store_factory):
+@pytest.mark.parametrize("reference", [
+    "blob:v1:test-container:missing",
+    json.dumps("blob:v1:test-container:missing"),
+])
+def test_activity_trigger_does_not_swallow_download_failure(monkeypatch, payload_store_factory, reference):
     monkeypatch.setattr(payloads, "_payload_store", payload_store_factory())
     with pytest.raises(KeyError):
         ActivityTriggerConverter.decode(
-            meta.Datum(type="string", value="blob:v1:test-container:missing"),
+            meta.Datum(type="string", value=reference),
             trigger_metadata=None)
+    with pytest.raises(KeyError):
+        FunctionsDataConverter().deserialize(reference)
+
+
+def test_whole_payload_token_string_is_reserved(monkeypatch, payload_store_factory):
+    store = payload_store_factory()
+    monkeypatch.setattr(payloads, "_payload_store", store)
+    stored_value = {"stored": "payload contents"}
+    reference = store.upload(json.dumps(stored_value).encode())
+
+    encoded = ActivityTriggerConverter.encode(reference, expected_type=None)
+
+    assert encoded.value == json.dumps(reference)
+    assert len(store._blobs) == 1
+    assert ActivityTriggerConverter.decode(encoded, trigger_metadata=None) == stored_value
+    assert FunctionsDataConverter().deserialize(encoded.value) == stored_value
+
+
+@pytest.mark.parametrize("threshold_bytes", [10, 1024])
+@pytest.mark.parametrize("reference_exists", [False, True])
+def test_object_wrapped_reference_round_trips_as_data(
+        monkeypatch, payload_store_factory, threshold_bytes, reference_exists):
+    store = payload_store_factory(threshold_bytes=threshold_bytes)
+    monkeypatch.setattr(payloads, "_payload_store", store)
+    reference = "blob:v1:test-container:missing"
+    if reference_exists:
+        reference = store.upload(b'{"stored":"not the literal reference"}')
+    value = {"reference": reference}
+
+    encoded = ActivityTriggerConverter.encode(value, expected_type=None)
+
+    assert len(store._blobs) == int(reference_exists) + int(threshold_bytes == 10)
+    assert ActivityTriggerConverter.decode(encoded, trigger_metadata=None) == value
+    assert FunctionsDataConverter().deserialize(encoded.value) == value
 
 
 def test_codec_hydrates_nested_entity_response(monkeypatch, payload_store_factory):
