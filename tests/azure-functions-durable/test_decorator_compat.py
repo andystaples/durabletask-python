@@ -278,7 +278,9 @@ async def test_activity_client_binding_preserves_user_type_and_invocation_contex
     client_decorator = app.durable_client_input(client_name="client")
     registered = (client_decorator(activity_decorator(function)) if client_outer
                   else activity_decorator(client_decorator(function)))
+    original_filename = inspect.getfile(function)
     function = registered.build().get_user_function()
+    assert inspect.getfile(function) == original_filename
     assert inspect.iscoroutinefunction(function) == user_async
     result = function(payload="result", client="{}", context=invocation)
     assert (await result if user_async else result) == "result"

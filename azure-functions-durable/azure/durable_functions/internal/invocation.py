@@ -11,6 +11,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar, copy_context
 from functools import lru_cache, wraps
+from types import FunctionType
 from typing import Any, Callable, ParamSpec, TypeVar
 
 import azure.functions as func
@@ -18,6 +19,12 @@ import azure.functions as func
 _invocation_context: ContextVar[func.Context | None] = ContextVar("durable_invocation_context", default=None)
 _Parameters = ParamSpec("_Parameters")
 _Result = TypeVar("_Result")
+
+
+def preserve_function_source(wrapper: Callable[..., Any], original: Callable[..., Any]) -> None:
+    """Preserve the filename used by the Functions worker to index the app directory."""
+    if isinstance(wrapper, FunctionType) and isinstance(original, FunctionType):
+        wrapper.__code__ = wrapper.__code__.replace(co_filename=original.__code__.co_filename)
 
 
 @lru_cache(maxsize=1)

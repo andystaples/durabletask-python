@@ -21,7 +21,7 @@ from ..http.builtin import (
     builtin_http_poll_orchestrator,
 )
 from ..internal.compat.activity import wrap_activity, wrap_activity_payloads
-from ..internal.invocation import wrap_invocation
+from ..internal.invocation import preserve_function_source, wrap_invocation
 from ..worker import DurableFunctionsWorker
 
 
@@ -454,6 +454,7 @@ class Blueprint(TriggerApi, BindingApi):
                     annotations[client_name] = str
                 client_bound.__annotations__ = annotations
                 setattr(client_bound, "client_function", function)
+                preserve_function_source(client_bound, function)
 
             if is_async_function:
                 @wraps(function)

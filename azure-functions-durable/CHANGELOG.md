@@ -21,6 +21,8 @@ User orchestrators remain generators, and activities retain their synchronous
 or asynchronous calling convention. Synchronous functions retain synchronous
 client bindings, and invocation logging context is preserved.
 Worker payload-size and storage errors retain their original error details.
+Activity wrappers preserve the application's source directory for
+`context.function_directory`, including when payload storage is not configured.
 
 ## v2.0.0rc1
 

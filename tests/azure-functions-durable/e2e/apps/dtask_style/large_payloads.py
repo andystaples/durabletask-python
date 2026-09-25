@@ -4,6 +4,7 @@
 """Blob-backed payload round trips through the real Functions bindings."""
 
 import json
+from pathlib import Path
 from typing import Any
 
 import azure.functions as func
@@ -19,6 +20,7 @@ bp = df.Blueprint()
 def payload_echo(payload: dict, client: df.SyncDurableFunctionsClient, context: func.Context) -> dict:
     assert isinstance(client, df.SyncDurableFunctionsClient)
     assert context.thread_local_storage.invocation_id == context.invocation_id
+    assert json.loads((Path(context.function_directory) / "host.json").read_text())["version"] == "2.0"
     return {"data": payload["data"], "stages": [*payload["stages"], "activity"]}
 
 
@@ -32,8 +34,9 @@ def payload_roundtrip(ctx: task.OrchestrationContext, payload: dict[str, Any]):
 
 @bp.activity_trigger(input_name="payload")
 @bp.durable_client_input(client_name="client")
-async def payload_echo_async(payload: dict, client: df.DurableFunctionsClient) -> dict:
+async def payload_echo_async(payload: dict, client: df.DurableFunctionsClient, context: func.Context) -> dict:
     assert isinstance(client, df.DurableFunctionsClient)
+    assert json.loads((Path(context.function_directory) / "host.json").read_text())["version"] == "2.0"
     return {"data": payload["data"], "stages": [*payload["stages"], "activity"]}
 
 

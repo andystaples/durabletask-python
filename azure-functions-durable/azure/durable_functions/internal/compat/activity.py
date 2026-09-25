@@ -33,6 +33,7 @@ from typing import Any, Callable, cast
 from azure.functions._durable_functions import df_loads
 
 from ..converters import ActivityTriggerConverter
+from ..invocation import preserve_function_source
 from ..payloads import (
     ActivityPayload,
     deexternalize_payload,
@@ -174,6 +175,7 @@ def wrap_activity(fn: Callable[..., Any], input_name: str) -> Callable[..., Any]
         if ret_ann is not inspect.Parameter.empty:
             annotations["return"] = ret_ann
     adapter.__annotations__ = annotations
+    preserve_function_source(adapter, fn)
     return adapter
 
 
@@ -222,4 +224,5 @@ def wrap_activity_payloads(fn: Callable[..., Any], input_name: str) -> Callable[
         wrapper = sync_wrapper
 
     setattr(wrapper, "__signature__", signature)
+    preserve_function_source(wrapper, fn)
     return wrapper

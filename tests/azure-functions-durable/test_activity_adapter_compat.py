@@ -32,6 +32,34 @@ def test_one_param_activity_passes_through_unchanged():
     assert wrap_activity(act, "x") is act
 
 
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("user_async", [False, True])
+async def test_activity_wrappers_preserve_indexed_source_directory(monkeypatch, native, user_async):
+    monkeypatch.setattr(payloads, "_payload_store", None)
+
+    def activity(payload):
+        return payload
+
+    async def async_activity(payload):
+        return payload
+
+    def native_activity(context, payload):
+        return payload
+
+    async def async_native_activity(context, payload):
+        return payload
+
+    original = (async_native_activity if user_async else native_activity) if native else (
+        async_activity if user_async else activity)
+    adapted = wrap_activity(original, "payload")
+    wrapped = wrap_activity_payloads(adapted, "payload")
+    assert inspect.getfile(adapted) == inspect.getfile(original)
+    assert inspect.getfile(wrapped) == inspect.getfile(original)
+    assert inspect.iscoroutinefunction(wrapped) == user_async
+    result = await wrapped("value") if user_async else wrapped("value")
+    assert result == "value"
+
+
 def test_two_param_activity_is_adapted_to_single_input():
     def act(ctx, payload):
         return (ctx, payload)
