@@ -112,7 +112,9 @@ pool. Both honor `PYTHON_THREADPOOL_THREAD_COUNT`.
 Activities retain their synchronous or asynchronous calling convention.
 Synchronous activities use synchronous storage inside the host-managed execution
 thread and remain directly callable without `await`; async activities await
-async storage. Binding converters perform no storage I/O. Synchronous functions
+async storage. Direct calls to decorated activities return ordinary Python values
+without accessing payload storage; transport processing applies only to host
+binding invocations. Binding converters perform no storage I/O. Synchronous functions
 still receive the synchronous durable client, and synchronous client APIs use
 synchronous storage. Direct `Orchestrator.handle()` and `Orchestrator.create()`
 adapters also remain synchronous.
@@ -121,6 +123,8 @@ Both client history APIs hydrate entity operation inputs and results, including
 values nested in the host's entity protocol envelopes. During orchestration
 replay, nested entity results are hydrated, but historical nested request inputs
 are not downloaded because replay only needs their correlation metadata.
+Historical scheduled activity inputs are also not downloaded during replay;
+explicit history retrieval continues to hydrate those inputs.
 
 > [!WARNING]
 > With payload storage configured, whole payload strings recognized by the
@@ -139,6 +143,17 @@ wrapper preserves the literal reference whether the object stays inline or is
 itself externalized. Keep the wrapper whenever passing that value across a
 durable payload boundary; passing its string field alone opts back into reference
 interpretation. Custom payload stores define their own reserved token syntax.
+
+> [!WARNING]
+> Recognized references are trusted transport inputs, not authorization
+> boundaries. `BlobPayloadStore` reads from the container named in the token
+> using its configured credentials; `container_name` selects the upload
+> container and does not restrict downloads. An account-wide connection string
+> can therefore allow reads outside that container. Use least-privilege
+> credentials scoped to the intended payload storage, and explicitly decide
+> whether external callers may supply references. Reject untrusted references
+> or validate their allowed storage locations before passing them into durable
+> APIs; token recognition alone does not authorize a read.
 
 ## Unit testing entities
 
