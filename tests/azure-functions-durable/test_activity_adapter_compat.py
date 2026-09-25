@@ -177,8 +177,7 @@ async def test_async_activity_awaits_storage_and_preserves_signature(
     store.upload_async.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_sync_activity_awaits_storage_and_offloads_user_code(monkeypatch, payload_store_factory):
+def test_sync_activity_uses_sync_storage_on_the_calling_thread(monkeypatch, payload_store_factory):
     store = payload_store_factory()
     monkeypatch.setattr(payloads, "_payload_store", store)
     value = {"large": "x" * 200}
@@ -187,11 +186,11 @@ async def test_sync_activity_awaits_storage_and_offloads_user_code(monkeypatch, 
     original_download = store.download
     original_upload = store.upload
 
-    async def download(reference):
+    def download(reference):
         thread_ids.append(threading.get_ident())
         return original_download(reference)
 
-    async def upload(data, *, instance_id=None):
+    def upload(data, *, instance_id=None):
         thread_ids.append(threading.get_ident())
         return original_upload(data, instance_id=instance_id)
 
@@ -200,18 +199,22 @@ async def test_sync_activity_awaits_storage_and_offloads_user_code(monkeypatch, 
         assert payload == value
         return payload
 
-    monkeypatch.setattr(store, "download_async", download)
-    monkeypatch.setattr(store, "upload_async", upload)
-    monkeypatch.setattr(store, "download", Mock(side_effect=AssertionError("sync download")))
-    monkeypatch.setattr(store, "upload", Mock(side_effect=AssertionError("sync upload")))
+    monkeypatch.setattr(store, "download", Mock(side_effect=download))
+    monkeypatch.setattr(store, "upload", Mock(side_effect=upload))
+    monkeypatch.setattr(store, "download_async", AsyncMock(side_effect=AssertionError("async download")))
+    monkeypatch.setattr(store, "upload_async", AsyncMock(side_effect=AssertionError("async upload")))
     wrapper = wrap_activity_payloads(activity, "payload")
-    assert inspect.iscoroutinefunction(wrapper)
+    assert not inspect.iscoroutinefunction(wrapper)
     decoded = ActivityTriggerConverter.decode(
         meta.Datum(type="string", value=token), trigger_metadata=None)
-    await wrapper(decoded)
-    assert len(thread_ids) == 3
-    assert thread_ids[0] == thread_ids[2] == threading.get_ident()
-    assert thread_ids[1] != threading.get_ident()
+    result = wrapper(decoded)
+    encoded = ActivityTriggerConverter.encode(result, expected_type=None)
+    assert json.loads(original_download(json.loads(encoded.value))) == value
+    assert thread_ids == [threading.get_ident()] * 3
+    store.download.assert_called_once_with(token)
+    store.upload.assert_called_once()
+    store.download_async.assert_not_called()
+    store.upload_async.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -223,8 +226,8 @@ async def test_activity_storage_errors_propagate_without_retry(
     monkeypatch.setattr(payloads, "_payload_store", store)
     token = store.upload(json.dumps("x" * 200).encode())
     error = OSError("payload storage unavailable")
-    failure = AsyncMock(side_effect=error)
-    monkeypatch.setattr(store, operation + "_async", failure)
+    failure = AsyncMock(side_effect=error) if use_async else Mock(side_effect=error)
+    monkeypatch.setattr(store, operation + ("_async" if use_async else ""), failure)
     called = []
 
     def activity(payload):
@@ -238,10 +241,16 @@ async def test_activity_storage_errors_propagate_without_retry(
     decoded = ActivityTriggerConverter.decode(
         meta.Datum(type="string", value=token), trigger_metadata=None)
     with pytest.raises(OSError) as raised:
-        await wrapper(decoded)
+        if use_async:
+            await wrapper(decoded)
+        else:
+            wrapper(decoded)
     assert raised.value is error
     assert called == ([True] if operation == "upload" else [])
-    failure.assert_awaited_once()
+    if use_async:
+        failure.assert_awaited_once()
+    else:
+        failure.assert_called_once()
 
 
 @pytest.mark.parametrize("setting, expected", [(None, None), ("2", 2), ("invalid", None), ("0", None)])
@@ -289,42 +298,3 @@ async def test_sync_execution_reuses_runtime_pool_and_resets_invocation_context(
             assert await loop.run_in_executor(executor, host_invocation_id.get) is None
             assert await loop.run_in_executor(executor, getattr, storage, "invocation_id") == "previous"
             assert invocation._invocation_context.get() is None
-
-
-async def test_storage_downloads_do_not_wait_for_execution_thread(monkeypatch, payload_store_factory):
-    store = payload_store_factory()
-    monkeypatch.setattr(payloads, "_payload_store", store)
-    token = store.upload(b'"input"')
-    loop = asyncio.get_running_loop()
-    executing = asyncio.Event()
-    downloaded = asyncio.Event()
-    release = threading.Event()
-    downloads = []
-
-    async def download(reference):
-        downloads.append(reference)
-        if len(downloads) == 2:
-            downloaded.set()
-        return store._blobs[reference]
-
-    def activity(payload):
-        loop.call_soon_threadsafe(executing.set)
-        assert release.wait(timeout=5)
-        return payload
-
-    monkeypatch.setattr(store, "download_async", download)
-    monkeypatch.setattr(store, "download", Mock(side_effect=AssertionError("sync download")))
-    wrapper = wrap_activity_payloads(activity, "payload")
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        monkeypatch.setattr(invocation, "_executor", lambda: executor)
-        first = asyncio.create_task(wrapper(payloads.ActivityPayload(token)))
-        second = None
-        try:
-            await asyncio.wait_for(executing.wait(), timeout=5)
-            second = asyncio.create_task(wrapper(payloads.ActivityPayload(token)))
-            await asyncio.wait_for(downloaded.wait(), timeout=5)
-            assert not first.done()
-            assert not second.done()
-        finally:
-            release.set()
-            await asyncio.gather(first, *([second] if second is not None else []))

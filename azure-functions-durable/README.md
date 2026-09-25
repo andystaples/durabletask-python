@@ -97,22 +97,30 @@ agree on the store and reference encoding; Functions references are JSON strings
 > host abandons and redelivers a work item after a storage failure. A transient
 > storage error can therefore become a terminal orchestration failure.
 
-Registered orchestration, entity, and activity handlers await the store's async
-methods before and after execution, including for synchronous user functions.
-Orchestrators remain synchronous generators; entities and synchronous activities
-run on execution threads with their invocation logging context preserved.
-Payload downloads and uploads do not occupy those threads, and serialization
-does not access storage during replay. Custom stores must implement genuinely
-nonblocking async methods to benefit from this behavior.
+Registered orchestration and entity handlers await the store's async methods
+before and after execution. Orchestrators remain synchronous generators, and
+orchestration replay and entity code run on execution threads with their
+invocation logging context preserved. Their payload downloads and uploads do
+not occupy those threads, and serialization does not access storage during
+replay. Custom stores must implement genuinely nonblocking async methods to
+benefit from this behavior.
 
-The SDK reuses the Functions runtime's thread pool when the runtime exposes it;
-otherwise it uses a process-wide SDK pool. Both honor
-`PYTHON_THREADPOOL_THREAD_COUNT` for synchronous execution. Synchronous user
-functions still receive the synchronous durable client, and synchronous client
-APIs still use synchronous storage. Both client history APIs hydrate entity
-operation inputs and results, including values nested in the host's entity
-protocol envelopes. Direct `Orchestrator.handle()` and `Orchestrator.create()`
+For orchestration and entity execution, the SDK reuses the Functions runtime's
+thread pool when the runtime exposes it; otherwise it uses a process-wide SDK
+pool. Both honor `PYTHON_THREADPOOL_THREAD_COUNT`.
+
+Activities retain their synchronous or asynchronous calling convention.
+Synchronous activities use synchronous storage inside the host-managed execution
+thread and remain directly callable without `await`; async activities await
+async storage. Binding converters perform no storage I/O. Synchronous functions
+still receive the synchronous durable client, and synchronous client APIs use
+synchronous storage. Direct `Orchestrator.handle()` and `Orchestrator.create()`
 adapters also remain synchronous.
+
+Both client history APIs hydrate entity operation inputs and results, including
+values nested in the host's entity protocol envelopes. During orchestration
+replay, nested entity results are hydrated, but historical nested request inputs
+are not downloaded because replay only needs their correlation metadata.
 
 > [!WARNING]
 > With payload storage configured, whole payload strings recognized by the

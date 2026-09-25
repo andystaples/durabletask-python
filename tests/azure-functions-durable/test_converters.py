@@ -10,7 +10,6 @@ that the converters use the durabletask-based encodings the host expects.
 """
 
 
-import asyncio
 import json
 
 import pytest
@@ -37,14 +36,14 @@ from azure.durable_functions.internal.compat.activity import wrap_activity_paylo
 
 
 def _encode_activity(value):
-    result = asyncio.run(wrap_activity_payloads(lambda payload: payload, "payload")(value))
+    result = wrap_activity_payloads(lambda payload: payload, "payload")(value)
     return ActivityTriggerConverter.encode(result, expected_type=None)
 
 
 def _decode_activity(datum, **kwargs):
     received = []
     wrapper = wrap_activity_payloads(lambda payload: received.append(payload), "payload")
-    asyncio.run(wrapper(ActivityTriggerConverter.decode(datum, trigger_metadata=None)))
+    wrapper(ActivityTriggerConverter.decode(datum, trigger_metadata=None))
     return received[0]
 
 

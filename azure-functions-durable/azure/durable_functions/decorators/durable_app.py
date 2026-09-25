@@ -326,9 +326,8 @@ class Blueprint(TriggerApi, BindingApi):
         """
         @self._build_function
         def wrap(fb: FunctionBuilder) -> FunctionBuilder:
-            registered = fb._function._func  # pyright: ignore[reportPrivateUsage]
             fb.add_trigger(
-                trigger=ActivityTrigger(name=getattr(registered, "_df_trigger_name", input_name), activity=activity))
+                trigger=ActivityTrigger(name=input_name, activity=activity))
             return fb
 
         def decorator(user_fn: Callable[..., Any]) -> FunctionBuilder:
@@ -337,8 +336,7 @@ class Blueprint(TriggerApi, BindingApi):
             # pass through unchanged.
             function = (user_fn._function._func  # pyright: ignore[reportPrivateUsage]
                         if isinstance(user_fn, FunctionBuilder) else user_fn)
-            registered = wrap_invocation(
-                wrap_activity_payloads(wrap_activity(function, input_name), input_name), input_name)
+            registered = wrap_activity_payloads(wrap_activity(function, input_name), input_name)
             if isinstance(user_fn, FunctionBuilder):
                 user_fn._function._func = registered  # pyright: ignore[reportPrivateUsage]
                 return wrap(user_fn)
@@ -425,7 +423,6 @@ class Blueprint(TriggerApi, BindingApi):
                         if isinstance(user_fn, FunctionBuilder) else user_fn)
             signature = inspect.signature(function)
             is_async_function = inspect.iscoroutinefunction(function)
-            is_async_user = getattr(function, "_df_user_is_async", is_async_function)
 
             def bind_client(
                     args: tuple[Any, ...],
@@ -440,7 +437,7 @@ class Blueprint(TriggerApi, BindingApi):
                 if not isinstance(raw_client, str):
                     raise TypeError(
                         f"durable client binding '{client_name}' did not provide its configuration")
-                client = (DurableFunctionsClient(raw_client) if is_async_user
+                client = (DurableFunctionsClient(raw_client) if is_async_function
                           else SyncDurableFunctionsClient.get_cached(raw_client))
                 bound.arguments[client_name] = client
                 return bound, client

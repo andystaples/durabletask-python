@@ -7,7 +7,9 @@ import threading
 from contextvars import ContextVar
 from types import SimpleNamespace
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from azure.durable_functions.internal import payloads
+from azure.durable_functions.internal.converters import ActivityTriggerConverter
 from azure.durable_functions.constants import (
     ACTIVITY_TRIGGER,
     DURABLE_CLIENT,
@@ -69,7 +71,7 @@ def test_activity_trigger_v1_signature():
     assert trigger.activity == "MyActivity"
 
 
-async def test_activity_trigger_adapts_durabletask_native_two_param():
+def test_activity_trigger_adapts_durabletask_native_two_param():
     app = df.DFApp()
 
     def my_activity(ctx, payload):
@@ -85,9 +87,46 @@ async def test_activity_trigger_adapts_durabletask_native_two_param():
     # ``input_name``, invoking the original with a placeholder activity context.
     import inspect
     registered = fb._function._func
-    assert list(inspect.signature(registered).parameters) == ["payload", "context"]
+    assert list(inspect.signature(registered).parameters) == ["payload"]
     assert registered.__name__ == "my_activity"
-    assert await registered("hello") == {"echo": "hello"}
+    assert not inspect.iscoroutinefunction(registered)
+    assert registered("hello") == {"echo": "hello"}
+
+
+@pytest.mark.parametrize("configured", [False, True])
+@pytest.mark.parametrize("user_async", [False, True])
+async def test_activity_trigger_preserves_direct_calls_and_skips_inline_storage(
+        monkeypatch, payload_store_factory, configured, user_async):
+    monkeypatch.setattr(payloads, "_payload_store", None)
+    app = df.DFApp()
+
+    def activity(payload):
+        return payload
+
+    async def async_activity(payload):
+        return payload
+
+    registered = app.activity_trigger(input_name="payload")(async_activity if user_async else activity)
+    store = payload_store_factory()
+    monkeypatch.setattr(store, "download", Mock(side_effect=AssertionError("inline download")))
+    monkeypatch.setattr(store, "upload", Mock(side_effect=AssertionError("inline upload")))
+    monkeypatch.setattr(store, "download_async", AsyncMock(side_effect=AssertionError("inline download")))
+    monkeypatch.setattr(store, "upload_async", AsyncMock(side_effect=AssertionError("inline upload")))
+    if configured:
+        app.configure_large_payloads(payload_store=store)
+    function = registered.build().get_user_function()
+    assert inspect.iscoroutinefunction(function) == user_async
+    assert list(inspect.signature(function).parameters) == ["payload"]
+    result = await function("hello") if user_async else function("hello")
+    assert not inspect.isawaitable(result)
+    if configured:
+        assert ActivityTriggerConverter.encode(result, expected_type=None).value == '"hello"'
+    else:
+        assert result == "hello"
+    store.download.assert_not_called()
+    store.upload.assert_not_called()
+    store.download_async.assert_not_called()
+    store.upload_async.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +266,7 @@ async def test_activity_client_binding_preserves_user_type_and_invocation_contex
         assert context is invocation
         assert context.thread_local_storage.invocation_id == context.invocation_id
         assert trace.get() == "trace-value"
-        assert (threading.get_ident() == host_thread) == user_async
+        assert threading.get_ident() == host_thread
         assert isinstance(client, df.DurableFunctionsClient if user_async else df.SyncDurableFunctionsClient)
         return payload
 
@@ -239,22 +278,23 @@ async def test_activity_client_binding_preserves_user_type_and_invocation_contex
     client_decorator = app.durable_client_input(client_name="client")
     registered = (client_decorator(activity_decorator(function)) if client_outer
                   else activity_decorator(client_decorator(function)))
-    assert inspect.iscoroutinefunction(registered._function._func)
-    assert await registered._function._func(payload="result", client="{}", context=invocation) == "result"
+    function = registered.build().get_user_function()
+    assert inspect.iscoroutinefunction(function) == user_async
+    result = function(payload="result", client="{}", context=invocation)
+    assert (await result if user_async else result) == "result"
 
 
-async def test_activity_context_trigger_name_does_not_hide_invocation_context():
+def test_activity_context_trigger_preserves_its_name_and_signature():
     app = df.DFApp()
-    invocation = SimpleNamespace(invocation_id="activity-id", thread_local_storage=threading.local())
 
     def activity(context):
-        assert invocation.thread_local_storage.invocation_id == invocation.invocation_id
         return context
 
     registered = app.activity_trigger(input_name="context")(activity)
-    trigger_name = _trigger(registered).name
-    assert trigger_name != "context"
-    assert await registered._function._func(**{trigger_name: "input", "context": invocation}) == "input"
+    assert _trigger(registered).name == "context"
+    function = registered.build().get_user_function()
+    assert list(inspect.signature(function).parameters) == ["context"]
+    assert function(context="input") == "input"
 
 
 # ---------------------------------------------------------------------------

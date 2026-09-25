@@ -137,7 +137,7 @@ def externalize_activity_output(value: str) -> str:
 
 
 def _entity_payload_fields(
-        events: Sequence[history.HistoryEvent], instance_id: str,
+        events: Sequence[history.HistoryEvent], instance_id: str, *, include_inputs: bool,
 ) -> Iterator[tuple[history.EventSentEvent | history.EventRaisedEvent, dict[str, Any], str]]:
     pending: set[str] = set()
     for event in events:
@@ -182,17 +182,18 @@ def _entity_payload_fields(
                 pending.add(request_id)
             elif envelope.get("signal") is not True:
                 continue
-        if isinstance(envelope.get(field), str):
+        if (include_inputs or field == "result") and isinstance(envelope.get(field), str):
             yield event, envelope, field
 
 
 def hydrate_entity_history(
         events: list[history.HistoryEvent], store: PayloadStore | None, instance_id: str,
+        *, include_inputs: bool = True,
 ) -> None:
     """Hydrate serialized entity protocol fields, never arbitrary object members."""
     if store is None:
         return
-    for event, envelope, field in _entity_payload_fields(events, instance_id):
+    for event, envelope, field in _entity_payload_fields(events, instance_id, include_inputs=include_inputs):
         request = ActivityRequest(input=StringValue(value=envelope[field]))
         deexternalize_payloads(request, store)
         if request.input.value != envelope[field]:
@@ -202,11 +203,12 @@ def hydrate_entity_history(
 
 async def hydrate_entity_history_async(
         events: list[history.HistoryEvent], store: PayloadStore | None, instance_id: str,
+        *, include_inputs: bool = True,
 ) -> None:
     """Hydrate entity history using the store's asynchronous download API."""
     if store is None:
         return
-    for event, envelope, field in _entity_payload_fields(events, instance_id):
+    for event, envelope, field in _entity_payload_fields(events, instance_id, include_inputs=include_inputs):
         request = ActivityRequest(input=StringValue(value=envelope[field]))
         await deexternalize_payloads_async(request, store)
         if request.input.value != envelope[field]:
@@ -224,19 +226,19 @@ def _entity_request_events(request: OrchestratorRequest) -> list[tuple[HistoryEv
 
 def _update_entity_request_events(events: list[tuple[HistoryEvent, history.HistoryEvent]]) -> None:
     for source, event in events:
-        if isinstance(event, history.EventSentEvent) and event.input is not None:
-            source.eventSent.input.value = event.input
-        elif isinstance(event, history.EventRaisedEvent) and event.input is not None:
+        if isinstance(event, history.EventRaisedEvent) and event.input is not None:
             source.eventRaised.input.value = event.input
 
 
 def hydrate_entity_request(request: OrchestratorRequest, store: PayloadStore) -> None:
+    """Hydrate entity replies for replay, leaving unused historical inputs alone."""
     events = _entity_request_events(request)
-    hydrate_entity_history([event for _, event in events], store, request.instanceId)
+    hydrate_entity_history([event for _, event in events], store, request.instanceId, include_inputs=False)
     _update_entity_request_events(events)
 
 
 async def hydrate_entity_request_async(request: OrchestratorRequest, store: PayloadStore) -> None:
+    """Await entity reply payloads before replay, without downloading historical inputs."""
     events = _entity_request_events(request)
-    await hydrate_entity_history_async([event for _, event in events], store, request.instanceId)
+    await hydrate_entity_history_async([event for _, event in events], store, request.instanceId, include_inputs=False)
     _update_entity_request_events(events)

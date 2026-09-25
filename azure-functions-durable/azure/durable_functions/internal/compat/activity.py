@@ -33,10 +33,11 @@ from typing import Any, Callable, cast
 from azure.functions._durable_functions import df_loads
 
 from ..converters import ActivityTriggerConverter
-from ..invocation import run_sync
 from ..payloads import (
     ActivityPayload,
+    deexternalize_payload,
     deexternalize_payload_async,
+    externalize_activity_output,
     externalize_activity_output_async,
     get_payload_store,
 )
@@ -177,9 +178,8 @@ def wrap_activity(fn: Callable[..., Any], input_name: str) -> Callable[..., Any]
 
 
 def wrap_activity_payloads(fn: Callable[..., Any], input_name: str) -> Callable[..., Any]:
-    """Await payload transport and offload synchronous user activities."""
+    """Run payload I/O inside the invocation, preserving sync/async dispatch."""
     signature = inspect.signature(fn)
-    is_async = inspect.iscoroutinefunction(fn)
 
     def decode(value: str) -> Any:
         try:
@@ -187,20 +187,39 @@ def wrap_activity_payloads(fn: Callable[..., Any], input_name: str) -> Callable[
         except json.JSONDecodeError:
             return value
 
-    @wraps(fn)
-    async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        enabled = get_payload_store() is not None
-        bound = signature.bind(*args, **kwargs)
-        value = bound.arguments.get(input_name)
-        if enabled and isinstance(value, ActivityPayload):
-            bound.arguments[input_name] = decode(await deexternalize_payload_async(value.value))
-        result = (await fn(*bound.args, **bound.kwargs) if is_async
-                  else await run_sync(fn, *bound.args, **bound.kwargs))
-        if not enabled or result is None:
-            return result
-        encoded = ActivityTriggerConverter.encode(result, expected_type=None).value
-        return ActivityPayload(await externalize_activity_output_async(encoded))
+    wrapper: Callable[..., Any]
+    if inspect.iscoroutinefunction(fn):
+        @wraps(fn)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            if get_payload_store() is None:
+                return await fn(*args, **kwargs)
+            bound = signature.bind(*args, **kwargs)
+            value = bound.arguments.get(input_name)
+            if isinstance(value, ActivityPayload):
+                bound.arguments[input_name] = decode(await deexternalize_payload_async(value.value))
+            result = await fn(*bound.args, **bound.kwargs)
+            if result is None:
+                return None
+            encoded = ActivityTriggerConverter.encode(result, expected_type=None).value
+            return ActivityPayload(await externalize_activity_output_async(encoded))
+
+        wrapper = async_wrapper
+    else:
+        @wraps(fn)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            if get_payload_store() is None:
+                return fn(*args, **kwargs)
+            bound = signature.bind(*args, **kwargs)
+            value = bound.arguments.get(input_name)
+            if isinstance(value, ActivityPayload):
+                bound.arguments[input_name] = decode(deexternalize_payload(value.value))
+            result = fn(*bound.args, **bound.kwargs)
+            if result is None:
+                return None
+            encoded = ActivityTriggerConverter.encode(result, expected_type=None).value
+            return ActivityPayload(externalize_activity_output(encoded))
+
+        wrapper = sync_wrapper
 
     setattr(wrapper, "__signature__", signature)
-    setattr(wrapper, "_df_user_is_async", getattr(fn, "_df_user_is_async", is_async))
     return wrapper

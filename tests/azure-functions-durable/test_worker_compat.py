@@ -10,6 +10,7 @@ stub, and returns the base64-encoded protobuf response. These tests exercise
 that path end-to-end without a sidecar or gRPC channel.
 """
 
+import asyncio
 import base64
 import json
 import threading
@@ -24,8 +25,9 @@ import durabletask.internal.helpers as helpers
 import durabletask.internal.orchestrator_service_pb2 as pb
 
 import azure.durable_functions as df
-from azure.durable_functions.internal import payloads
+from azure.durable_functions.internal import invocation, payloads
 from azure.durable_functions.worker import DurableFunctionsWorker
+from durabletask.entities import EntityInstanceId
 from durabletask.payload import PayloadStore
 
 TEST_INSTANCE_ID = "inst-123"
@@ -168,6 +170,98 @@ async def test_async_worker_uses_only_async_storage(monkeypatch, payload_store_f
     store.upload_async.assert_awaited_once()
 
 
+@pytest.mark.parametrize("entity", [False, True])
+async def test_storage_downloads_do_not_wait_for_execution_thread(monkeypatch, payload_store_factory, entity):
+    store = payload_store_factory()
+    monkeypatch.setattr(payloads, "_payload_store", store)
+    token = json.dumps(store.upload(b'"input"'))
+    loop = asyncio.get_running_loop()
+    executing = asyncio.Event()
+    downloaded = asyncio.Event()
+    release = threading.Event()
+    downloads = []
+
+    async def download(reference):
+        downloads.append(reference)
+        if len(downloads) == 2:
+            downloaded.set()
+        return store._blobs[reference]
+
+    def execute(context):
+        assert context.get_input() == "input"
+        loop.call_soon_threadsafe(executing.set)
+        assert release.wait(timeout=5)
+        return "done"
+
+    monkeypatch.setattr(store, "download_async", download)
+    monkeypatch.setattr(store, "download", Mock(side_effect=AssertionError("sync download")))
+    worker = DurableFunctionsWorker()
+    encoded = (_encode_entity_batch_request("@execute@key", "get", token) if entity
+               else _encode_orchestrator_request("execute", token))
+    invoke = worker.execute_entity_batch_request_async if entity else worker.execute_orchestration_request_async
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr(invocation, "_executor", lambda: executor)
+        first = asyncio.create_task(invoke(execute, encoded))
+        second = None
+        try:
+            await asyncio.wait_for(executing.wait(), timeout=5)
+            second = asyncio.create_task(invoke(execute, encoded))
+            await asyncio.wait_for(downloaded.wait(), timeout=5)
+            assert not first.done()
+            assert not second.done()
+        finally:
+            release.set()
+            await asyncio.gather(first, *([second] if second is not None else []))
+    assert len(downloads) == 2
+
+
+@pytest.mark.parametrize("entity", [False, True])
+async def test_storage_uploads_do_not_hold_execution_thread(monkeypatch, payload_store_factory, entity):
+    store = payload_store_factory()
+    monkeypatch.setattr(payloads, "_payload_store", store)
+    uploading = asyncio.Event()
+    release = asyncio.Event()
+    upload = store.upload
+
+    async def upload_async(data, *, instance_id=None):
+        uploading.set()
+        await release.wait()
+        return upload(data, instance_id=instance_id)
+
+    def orchestrator(context):
+        return "x" * 200
+
+    def counter(context):
+        context.set_state("x" * 200)
+
+    monkeypatch.setattr(store, "upload_async", upload_async)
+    monkeypatch.setattr(store, "upload", Mock(side_effect=AssertionError("sync upload")))
+    worker = DurableFunctionsWorker()
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr(invocation, "_executor", lambda: executor)
+        execution = (worker.execute_entity_batch_request_async(
+            counter, _encode_entity_batch_request("@counter@key", "set")) if entity
+            else worker.execute_orchestration_request_async(
+                orchestrator, _encode_orchestrator_request("upload")))
+        pending = asyncio.create_task(execution)
+        try:
+            await asyncio.wait_for(uploading.wait(), timeout=5)
+            assert not pending.done()
+            assert await asyncio.wait_for(
+                loop.run_in_executor(executor, lambda: "available"), timeout=5) == "available"
+        finally:
+            release.set()
+            result = await pending
+    if entity:
+        value = _decode_entity_response(result).entityState.value
+    else:
+        completion = _get_completion_action(_decode_orchestrator_response(result))
+        assert completion.orchestrationStatus == pb.ORCHESTRATION_STATUS_COMPLETED
+        value = completion.result.value
+    assert json.loads(store.download(json.loads(value))) == "x" * 200
+
+
 @pytest.mark.parametrize("modern_request", [False, True])
 @pytest.mark.parametrize("storage_failure", [False, True])
 async def test_async_worker_hydrates_entity_envelopes_before_execution(
@@ -211,8 +305,52 @@ async def test_async_worker_hydrates_entity_envelopes_before_execution(
         assert json.loads(hydrated.newEvents[0].eventRaised.input.value)["result"] == value
         assert hydrated.newEvents[1] == unrelated
         if not modern_request:
-            assert json.loads(hydrated.pastEvents[0].eventSent.input.value)["input"] == value
-        assert store.download_async.await_count == (1 if modern_request else 2)
+            assert hydrated.pastEvents[0] == sent
+        store.download_async.assert_awaited_once()
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_replay_skips_unavailable_historical_entity_input(monkeypatch, payload_store_factory, use_async):
+    store = payload_store_factory()
+    monkeypatch.setattr(payloads, "_payload_store", store)
+    result_token = store.upload(b'"ok"')
+    missing_input = json.dumps("blob:v1:test-container:missing")
+    request_id = "63c281d7-02d7-412c-9f66-1d6d26a83948"
+    sent = pb.HistoryEvent(eventId=1)
+    sent.eventSent.instanceId = "@counter@one"
+    sent.eventSent.name = "op"
+    sent.eventSent.input.value = json.dumps({
+        "id": request_id, "op": "set", "parent": TEST_INSTANCE_ID, "input": missing_input})
+    reply = pb.HistoryEvent(eventId=2)
+    reply.eventRaised.name = request_id
+    reply.eventRaised.input.value = json.dumps({"result": json.dumps(result_token)})
+    request = pb.OrchestratorRequest(instanceId=TEST_INSTANCE_ID)
+    request.pastEvents.extend([
+        helpers.new_orchestrator_started_event(),
+        helpers.new_execution_started_event("entity-replay", TEST_INSTANCE_ID),
+        sent,
+    ])
+    request.newEvents.extend([helpers.new_orchestrator_started_event(), reply])
+    download = store.download
+    monkeypatch.setattr(store, "download", Mock(side_effect=download))
+    monkeypatch.setattr(store, "download_async", AsyncMock(side_effect=download))
+
+    def orchestrator(context, value):
+        return (yield context.call_entity(EntityInstanceId("counter", "one"), "set", input="x" * 200))
+
+    worker = DurableFunctionsWorker()
+    encoded = base64.b64encode(request.SerializeToString()).decode()
+    result = (await worker.execute_orchestration_request_async(orchestrator, encoded) if use_async
+              else worker.execute_orchestration_request(orchestrator, encoded))
+    completion = _get_completion_action(_decode_orchestrator_response(result))
+    assert completion.orchestrationStatus == pb.ORCHESTRATION_STATUS_COMPLETED
+    assert json.loads(completion.result.value) == "ok"
+    if use_async:
+        store.download_async.assert_awaited_once_with(result_token)
+        store.download.assert_not_called()
+    else:
+        store.download.assert_called_once_with(result_token)
+        store.download_async.assert_not_called()
 
 
 def _encode_orchestrator_request(name, encoded_input=None, instance_id=TEST_INSTANCE_ID):
