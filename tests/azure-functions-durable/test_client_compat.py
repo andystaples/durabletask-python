@@ -161,7 +161,10 @@ async def test_history_hydrates_only_correlated_entity_envelopes(
     ordinary = pb.HistoryEvent(eventId=3)
     ordinary.eventRaised.name = "application-event"
     ordinary.eventRaised.input.value = reply.eventRaised.input.value
-    chunks = [pb.HistoryChunk(events=[request]), pb.HistoryChunk(events=[reply, ordinary])]
+    scheduled = pb.HistoryEvent(eventId=4)
+    scheduled.taskScheduled.name = "echo"
+    scheduled.taskScheduled.input.value = token
+    chunks = [pb.HistoryChunk(events=[request]), pb.HistoryChunk(events=[reply, ordinary, scheduled])]
 
     async def stream():
         for chunk in chunks:
@@ -180,11 +183,12 @@ async def test_history_hydrates_only_correlated_entity_envelopes(
             events = client.get_orchestration_history("instance", execution_id="execution")
         assert json.loads(json.loads(events[1].input)["result"]) == {"data": "hydrated"}
         assert events[2].input == ordinary.eventRaised.input.value
+        assert json.loads(events[3].input) == {"data": "hydrated"}
         assert json.loads(reply.eventRaised.input.value)["result"] == token
         if not modern_request:
             assert json.loads(json.loads(events[0].input)["input"]) == {"data": "hydrated"}
         assert stub.StreamInstanceHistory.call_args.args[0].executionId.value == "execution"
-        expected_downloads = 1 if modern_request else 2
+        expected_downloads = 2 if modern_request else 3
         assert store.download.call_count == (0 if use_async else expected_downloads)
         assert store.download_async.await_count == (expected_downloads if use_async else 0)
     finally:

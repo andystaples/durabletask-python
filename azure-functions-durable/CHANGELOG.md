@@ -16,7 +16,8 @@ inputs and outputs, custom status, external events, entity state and results,
 and registered blueprints. History APIs also hydrate entity operation inputs
 and results. Registered orchestration and entity handlers await asynchronous
 payload storage without occupying synchronous execution threads. Replay does
-not download unused nested inputs from historical entity requests.
+not download unused inputs from historical scheduled activities or nested inputs
+from historical entity requests. Explicit history retrieval still hydrates them.
 User orchestrators remain generators, and activities retain their synchronous
 or asynchronous calling convention. Synchronous functions retain synchronous
 client bindings, and invocation logging context is preserved.

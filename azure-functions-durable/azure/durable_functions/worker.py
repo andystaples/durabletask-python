@@ -23,7 +23,10 @@ from .internal.azurefunctions_null_stub import AzureFunctionsNullStub
 from .internal.invocation import run_sync
 from .internal.compat.entity_context import wrap_entity
 from .internal.compat.orchestration_context import wrap_orchestrator
-from .internal.payloads import get_transport_payload_store, hydrate_entity_request, hydrate_entity_request_async
+from .internal.payloads import (
+    discard_scheduled_activity_inputs, get_transport_payload_store,
+    hydrate_entity_request, hydrate_entity_request_async,
+)
 from .internal.serialization import DEFAULT_FUNCTIONS_DATA_CONVERTER
 
 _LOGGER = logging.getLogger(__name__)
@@ -98,6 +101,7 @@ class DurableFunctionsWorker(TaskHubGrpcWorker):
         request = OrchestratorRequest()
         request.ParseFromString(base64.b64decode(orchestration_context))
         if payload_store is not None:
+            discard_scheduled_activity_inputs(request)
             deexternalize_payloads(request, payload_store)
             hydrate_entity_request(request, payload_store)
         response = self._run_orchestration(func, request)
@@ -110,6 +114,7 @@ class DurableFunctionsWorker(TaskHubGrpcWorker):
         request = OrchestratorRequest()
         request.ParseFromString(base64.b64decode(getattr(context, "body", None) or context))
         if payload_store is not None:
+            discard_scheduled_activity_inputs(request)
             await deexternalize_payloads_async(request, payload_store)
             await hydrate_entity_request_async(request, payload_store)
         response = await run_sync(self._run_orchestration, func, request)

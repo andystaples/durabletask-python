@@ -224,6 +224,13 @@ def _entity_request_events(request: OrchestratorRequest) -> list[tuple[HistoryEv
     ]
 
 
+def discard_scheduled_activity_inputs(request: OrchestratorRequest) -> None:
+    """Omit activity inputs that replay never consumes before downloading references."""
+    for event in chain(request.pastEvents, request.newEvents):
+        if event.HasField("taskScheduled"):
+            event.taskScheduled.ClearField("input")
+
+
 def _update_entity_request_events(events: list[tuple[HistoryEvent, history.HistoryEvent]]) -> None:
     for source, event in events:
         if isinstance(event, history.EventRaisedEvent) and event.input is not None:

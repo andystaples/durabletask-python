@@ -353,6 +353,48 @@ async def test_replay_skips_unavailable_historical_entity_input(monkeypatch, pay
         store.download_async.assert_not_called()
 
 
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("missing_blobs", [False, True])
+async def test_replay_skips_scheduled_inputs(monkeypatch, payload_store_factory, use_async, missing_blobs):
+    store = payload_store_factory()
+    monkeypatch.setattr(payloads, "_payload_store", store)
+    request = pb.OrchestratorRequest(instanceId=TEST_INSTANCE_ID)
+    request.pastEvents.extend([
+        helpers.new_orchestrator_started_event(),
+        helpers.new_execution_started_event("activity-replay", TEST_INSTANCE_ID),
+    ])
+    for task_id in range(1, 21):
+        token = store.upload(json.dumps("x" * 300_000).encode())
+        events = request.pastEvents if task_id < 20 else request.newEvents
+        events.extend([
+            helpers.new_orchestrator_started_event(),
+            helpers.new_task_scheduled_event(task_id, "echo", encoded_input=json.dumps(token)),
+            helpers.new_task_completed_event(task_id, json.dumps("ok")),
+        ])
+    if missing_blobs:
+        store._blobs.clear()
+    download = store.download
+    monkeypatch.setattr(store, "download", Mock(side_effect=download))
+    monkeypatch.setattr(store, "download_async", AsyncMock(side_effect=download))
+
+    def orchestrator(context, value):
+        for index in range(20):
+            result = yield context.call_activity("echo", input="x" * 300_000)
+            assert result == "ok"
+        return "complete"
+
+    worker = DurableFunctionsWorker()
+    encoded = base64.b64encode(request.SerializeToString()).decode()
+    result = (await worker.execute_orchestration_request_async(orchestrator, encoded) if use_async
+              else worker.execute_orchestration_request(orchestrator, encoded))
+    completion = _get_completion_action(_decode_orchestrator_response(result))
+    assert completion.orchestrationStatus == pb.ORCHESTRATION_STATUS_COMPLETED
+    assert json.loads(completion.result.value) == "complete"
+    store.download.assert_not_called()
+    store.download_async.assert_not_called()
+    assert request.pastEvents[3].taskScheduled.HasField("input")
+
+
 def _encode_orchestrator_request(name, encoded_input=None, instance_id=TEST_INSTANCE_ID):
     """Build a base64-encoded ``OrchestratorRequest`` for a single new dispatch."""
     request = pb.OrchestratorRequest(instanceId=instance_id)
