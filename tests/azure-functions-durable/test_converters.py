@@ -36,7 +36,9 @@ from azure.durable_functions.internal.compat.activity import wrap_activity_paylo
 
 
 def _encode_activity(value):
-    result = wrap_activity_payloads(lambda payload: payload, "payload")(value)
+    host_input = ActivityTriggerConverter.decode(
+        meta.Datum(type="json", value="null"), trigger_metadata=None)
+    result = wrap_activity_payloads(lambda payload: value, "payload")(host_input)
     return ActivityTriggerConverter.encode(result, expected_type=None)
 
 

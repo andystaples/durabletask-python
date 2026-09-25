@@ -139,7 +139,7 @@ class ActivityTriggerConverter(meta.InConverter,
         if data_type in ['string', 'json']:
             value = data.value
             store = get_transport_payload_store()
-            if store is not None and store.is_known_token(value):
+            if store is not None:
                 return ActivityPayload(value)
             try:
                 result = df_loads(value)

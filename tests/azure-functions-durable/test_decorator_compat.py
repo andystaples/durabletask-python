@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from azure.durable_functions.internal import payloads
-from azure.durable_functions.internal.converters import ActivityTriggerConverter
 from azure.durable_functions.constants import (
     ACTIVITY_TRIGGER,
     DURABLE_CLIENT,
@@ -95,8 +94,8 @@ def test_activity_trigger_adapts_durabletask_native_two_param():
 
 @pytest.mark.parametrize("configured", [False, True])
 @pytest.mark.parametrize("user_async", [False, True])
-async def test_activity_trigger_preserves_direct_calls_and_skips_inline_storage(
-        monkeypatch, payload_store_factory, configured, user_async):
+@pytest.mark.parametrize("value", [None, "hello", {"large": "x" * 200}])
+async def test_direct_activity_calls_skip_storage(monkeypatch, payload_store_factory, configured, user_async, value):
     monkeypatch.setattr(payloads, "_payload_store", None)
     app = df.DFApp()
 
@@ -117,12 +116,9 @@ async def test_activity_trigger_preserves_direct_calls_and_skips_inline_storage(
     function = registered.build().get_user_function()
     assert inspect.iscoroutinefunction(function) == user_async
     assert list(inspect.signature(function).parameters) == ["payload"]
-    result = await function("hello") if user_async else function("hello")
+    result = await registered(value) if user_async else registered(value)
     assert not inspect.isawaitable(result)
-    if configured:
-        assert ActivityTriggerConverter.encode(result, expected_type=None).value == '"hello"'
-    else:
-        assert result == "hello"
+    assert result is value
     store.download.assert_not_called()
     store.upload.assert_not_called()
     store.download_async.assert_not_called()

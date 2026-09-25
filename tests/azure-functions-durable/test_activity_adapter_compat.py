@@ -205,6 +205,29 @@ async def test_async_activity_awaits_storage_and_preserves_signature(
     store.upload_async.assert_awaited_once()
 
 
+@pytest.mark.parametrize("user_async", [False, True])
+@pytest.mark.parametrize("value", [None, "small", {"small": True}])
+async def test_host_activity_externalizes_large_output_from_inline_input(
+        monkeypatch, payload_store_factory, user_async, value):
+    store = payload_store_factory()
+    monkeypatch.setattr(payloads, "_payload_store", store)
+    output = {"large": "x" * 200}
+
+    def activity(payload):
+        assert payload == value
+        return output
+
+    async def async_activity(payload):
+        return activity(payload)
+
+    wrapper = wrap_activity_payloads(async_activity if user_async else activity, "payload")
+    decoded = ActivityTriggerConverter.decode(
+        meta.Datum(type="json", value=json.dumps(value)), trigger_metadata=None)
+    result = await wrapper(decoded) if user_async else wrapper(decoded)
+    encoded = ActivityTriggerConverter.encode(result, expected_type=None)
+    assert json.loads(store.download(json.loads(encoded.value))) == output
+
+
 def test_sync_activity_uses_sync_storage_on_the_calling_thread(monkeypatch, payload_store_factory):
     store = payload_store_factory()
     monkeypatch.setattr(payloads, "_payload_store", store)

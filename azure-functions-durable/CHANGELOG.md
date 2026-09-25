@@ -23,6 +23,8 @@ client bindings, and invocation logging context is preserved.
 Worker payload-size and storage errors retain their original error details.
 Activity wrappers preserve the application's source directory for
 `context.function_directory`, including when payload storage is not configured.
+Direct activity calls retain their Python return values and do not access payload
+storage; externalization applies only to host binding invocations.
 
 ## v2.0.0rc1
 

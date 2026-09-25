@@ -40,7 +40,6 @@ from ..payloads import (
     deexternalize_payload_async,
     externalize_activity_output,
     externalize_activity_output_async,
-    get_payload_store,
 )
 from .orchestration_context import accepts_two_positional_args
 
@@ -188,17 +187,19 @@ def wrap_activity_payloads(fn: Callable[..., Any], input_name: str) -> Callable[
             return df_loads(value)
         except json.JSONDecodeError:
             return value
+        except Exception as error:
+            raise ValueError('activity trigger input must be a string or a '
+                             f'valid json serializable ({value})') from error
 
     wrapper: Callable[..., Any]
     if inspect.iscoroutinefunction(fn):
         @wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            if get_payload_store() is None:
-                return await fn(*args, **kwargs)
             bound = signature.bind(*args, **kwargs)
             value = bound.arguments.get(input_name)
-            if isinstance(value, ActivityPayload):
-                bound.arguments[input_name] = decode(await deexternalize_payload_async(value.value))
+            if not isinstance(value, ActivityPayload):
+                return await fn(*args, **kwargs)
+            bound.arguments[input_name] = decode(await deexternalize_payload_async(value.value))
             result = await fn(*bound.args, **bound.kwargs)
             if result is None:
                 return None
@@ -209,12 +210,11 @@ def wrap_activity_payloads(fn: Callable[..., Any], input_name: str) -> Callable[
     else:
         @wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            if get_payload_store() is None:
-                return fn(*args, **kwargs)
             bound = signature.bind(*args, **kwargs)
             value = bound.arguments.get(input_name)
-            if isinstance(value, ActivityPayload):
-                bound.arguments[input_name] = decode(deexternalize_payload(value.value))
+            if not isinstance(value, ActivityPayload):
+                return fn(*args, **kwargs)
+            bound.arguments[input_name] = decode(deexternalize_payload(value.value))
             result = fn(*bound.args, **bound.kwargs)
             if result is None:
                 return None
