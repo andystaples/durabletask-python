@@ -10,24 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ADDED
 
 - Added `DFApp.configure_large_payloads(payload_store=...)` to externalize large
-payloads using a shared payload store, including Azure Blob Storage. Configuration
-applies to synchronous and asynchronous clients, orchestration and activity
-inputs and outputs, custom status, external events, entity state and results,
-and registered blueprints. History APIs also hydrate entity operation inputs
-and results. Registered orchestration and entity handlers await asynchronous
-payload storage without occupying synchronous execution threads. Replay does
-not download unused inputs from historical scheduled activities or nested inputs
-from historical entity requests. Explicit history retrieval still hydrates them.
-User orchestrators remain generators, and activities retain their synchronous
-or asynchronous calling convention. Synchronous functions retain synchronous
-client bindings, and invocation logging context is preserved.
-Worker payload-size and storage errors retain their original error details.
-Activity wrappers preserve the application's source directory for
-`context.function_directory`, including when payload storage is not configured.
-Direct activity calls retain their Python return values and do not access payload
-storage; externalization applies only to host binding invocations.
-With the corresponding core SDK update, asynchronous Blob payload transfers
-also keep compression and decompression off the Functions invocation event loop.
+durable payloads to Azure Blob Storage or a custom payload store.
+- Configured clients automatically hydrate stored payloads, including
+orchestration history and entity operation inputs and results.
+
+FIXED
+
+- Preserved the application's source directory in `context.function_directory`
+for decorated activities and durable-client functions.
 
 ## v2.0.0rc1
 
